@@ -63,7 +63,9 @@ The chiller is the main source of electricity consumption. It is a central piece
 - an evaporator
 - a condenser
 
-## Water cooled
+## Equations
+
+### Water cooled
 $
 T_{evap, out} = T_{setpoint} $[1]
 
@@ -79,8 +81,19 @@ COP = \frac{COP_{ref}}{EIR(PLR)} $[2]  \cite{COP_ASHRAE}
 $
 T_{cond, out} = T_{cond, in} + (1 + \frac{1}{COP})\frac{ D_{evap}}{ D_{cond}} ( T_{evap, in} - T_{evap, out} )$ [3]
 
+### Air cooled 
 
-### Assumptions
+
+
+$$
+T_{evap, out} = T_{setpoint} 
+
+
+
+T_{air, out} = T_{air, in} + (1 + \frac{1}{COP}) \frac{D_{evap} \rho_w c_{p, w}}{D_{outside, air}\rho_air c_{p, air}} ( T_{evap, in} - T_{evap, out} ) 
+$$
+
+## Assumptions
 [1]
 - Perfect setpoint tracking, control asssumption
 
@@ -97,7 +110,7 @@ T_{cond, out} = T_{cond, in} + (1 + \frac{1}{COP})\frac{ D_{evap}}{ D_{cond}} ( 
 - Chillers are working at their rated conditions
 - No maximum cooling capacity
 
-### Parameters
+## Parameters
 
 $
 Q_{rated} # in tons 
@@ -110,7 +123,7 @@ T_{setpoint}
 
 $
 
-### Values 
+## Values for water cooled chillers
 
 $
 1 nominal ton of refrigeration = 3.517 kW cooling output
@@ -129,14 +142,52 @@ COP_{ref}  \in [0.54, 0.64] kW/ton => [5.5, 6.5] adim \cite{Trane_chiller_ex}, \
  (0.064, 0.585, 0.353)
 $
 
+These are considered the default parameters for a water cooled chiller
 
-#### Choice of parameters: 
+After more research, there is EnergyPlus with a bit less than 300 chiller models, air and water cooled collected over a 10-year period from 1991 to 2001. \cite{EnergyPlus_Git}
+
+We can confirm good consistency between the default parameters and the statistical analysis of the EnergyPlus data for water-cooled chillers. However, the default interval of cooling capacity underestimates the maximum cooling capacity for a factor 4. 
+
+Note: For my modelling, I erased two models (DOE...) because no reference_capacity_kW was specified (null).
+
+### EnergyPlus data, statistical analyzis
+
+### Characterisation of the EnergyPlus chiller dataset
+
+Before using the chiller models for further analysis, the content of the EnergyPlus `Chillers.idf` dataset was examined in order to understand the range and nature of the equipment represented. The file contains a total of **273 chiller models**, of which **162 are water-cooled** and **111 are air-cooled**, corresponding to approximately 59% and 41% of the dataset, respectively. The following analysis considers the compressor technologies represented in each group, as well as the distributions of reference cooling capacity and reference coefficient of performance (COP).
+
+#### Compressor technologies
+
+The water-cooled chillers are dominated by **centrifugal compressors**, which account for **110 of the 162 models (67.9%)**. Screw compressors represent a substantially smaller fraction, with **21 models (13.0%)**, while only one reciprocating and one scroll chiller are present. For **29 water-cooled chillers (17.9%)**, the compressor type could not be identified from the available metadata and was therefore classified as unknown. This distribution indicates that the water-cooled portion of the dataset is primarily representative of centrifugal chiller technology, which is consistent with the larger cooling capacities typically associated with this type of equipment.
+
+The air-cooled chillers exhibit a markedly different technological distribution. Of the **111 air-cooled models**, **92 (82.9%) use scroll compressors**, while the remaining **19 (17.1%) use screw compressors**. No centrifugal or reciprocating compressor models are represented in this subset. The distinction between the two groups is therefore quite pronounced: the air-cooled database is largely composed of scroll chillers, whereas the water-cooled database is dominated by centrifugal machines.
+
+#### Reference cooling capacity
+
+The reference cooling capacities also show a substantial difference between the two condenser types. For the water-cooled chillers, **160 models contain a valid reference cooling capacity**, with values ranging from **172.3 kW to 5651.3 kW**, giving an overall span of **5479 kW**. The models therefore cover equipment ranging from relatively small water-cooled units to multi-megawatt chillers. To assess how continuously this capacity range is represented, the capacities were sorted in ascending order and the differences between consecutive values were calculated. The largest gap is **854.5 kW**, occurring between **3165.0 kW** and **4019.5 kW**, corresponding respectively to the *McQuay PFH 3165 kW/6.48 COP/Vanes* and *McQuay PFH 4020 kW/7.35 COP/Vanes* models. Thus, although the water-cooled dataset covers a very broad capacity range, the representation becomes relatively sparse in some parts of the high-capacity region.
+
+All **111 air-cooled chillers** contain valid capacity information. Their reference capacities range from **34.465 kW to 1609.4 kW**, corresponding to an overall span of approximately **1575 kW**. The largest interval between two consecutive capacities is considerably smaller than for the water-cooled chillers, at **151.5 kW**, between the **1348.0 kW Carrier 30XA400** and the **1499.5 kW Carrier 30XA450**. The air-cooled models therefore occupy a narrower and generally lower capacity range, while also providing a relatively denser coverage of that range.
+
+#### Reference COP
+
+The reference COP values further differentiate the two groups. For the **162 water-cooled chillers**, the reference COP ranges from **3.67 to 11.77**, resulting in a total span of **8.10**. After sorting the COP values, the largest gap between consecutive observations is **1.16**, between COP values of **10.61** and **11.77**. These values correspond to the *York YT 563 kW/10.61 COP/Vanes* and *Trane CVHF 2567 kW/11.77 COP/VSD* models. The broad COP range reflects the diversity of water-cooled equipment represented in the file, including different capacities, compressor technologies and capacity-control strategies.
+
+By contrast, the COP values of the air-cooled chillers are concentrated within a much narrower interval. Across all **111 models**, the reference COP ranges from **2.61 to 3.17**, for a total span of only **0.56**. The largest gap between consecutive COP values is **0.13**, between **2.67 and 2.80**. Consequently, the air-cooled models form a relatively homogeneous group in terms of reference efficiency compared with the much wider variation observed among the water-cooled chillers.
+
+#### Overall dataset coverage
+
+Overall, this preliminary examination shows that `Chillers.idf` does not represent a uniform population of chillers. The air-cooled subset is primarily composed of scroll-compressor equipment, covers capacities from roughly **35 kW to 1.6 MW**, and exhibits a relatively narrow range of reference COP values. The water-cooled subset is considerably broader, both in capacity and performance, extending from approximately **170 kW to 5.7 MW** and being dominated by centrifugal compressors. Examining the minimum and maximum values together with the gaps between consecutive observations is particularly useful because it provides information not only on the nominal extent of the dataset, but also on how densely the different operating regions are represented. These characteristics should therefore be taken into account when selecting models from the EnergyPlus database or when using the dataset to construct a representative chiller population.
+
+![EnergyPlus_COP](./pictures/COP_stat_energyPlus.png)
+![EnergyPlus_CoolingCapa](./pictures/CC_stat_energyPlus.png)
+
+### Choice of parameters: 
 
 Q_rated and COP_ref (full-load COP) are certified, published value under the standard:\cite{Standard_AHRI550}. Furthermore their situation reference is standardized in temperatures leaving and entering. 
 
 Both numbers come from the exact same test and the exact same standard rating conditions : 44.00°F leaving and 54.00°F entering chilled-fluid temperatures, with 85.00°F entering and 94.30°F leaving condenser-fluid temperatures for water-cooled units. So Q_rated and COP_ref are a matched pair, both certified together, both published on the same spec sheet / AHRI certificate.
 
-### Validity domain
+## Validity domain
 
 [1]
 - Only valid if T_evap,out actually reaches setpoint — under extreme load or insufficient capacity this fails silently (the equation will overstate cooling delivered).
@@ -153,7 +204,7 @@ Both numbers come from the exact same test and the exact same standard rating co
 
 
 - The set of (Q_{rated}, COP_{ref}) parameters are taken for Centrifugal Chillers.
-### Confidence interval
+## Confidence interval
 
 
 [2]
@@ -170,31 +221,7 @@ $ \delta T_{cond,out} = \epsilon \frac{D_{evap}( T_{evap, in} - T_{evap, out} ) 
 
 With numerical values we get a maximum: $\delta T_{cond,out} = \pm 0.1 C$
 
-## Air cooled (Not finished)
 
-$$
-T_{evap, out} = T_{setpoint} 
-
-
-
-T_{air, out} = T_{air, in} + (1 + \frac{1}{COP}) \frac{D_{evap} \rho_w c_{p, w}}{D_{outside, air}\rho_air c_{p, air}} ( T_{evap, in} - T_{evap, out} ) 
-$$
-
-
-### Parameters
-
-For Liquid-cooled / direct-to-chip (increasingly the HPC/AI-hyperscaler norm)
-
-ASHRAE TC 9.9 defines this via the **W-classes**, which name the facility chilled supply water temperature directly:
-
-| Class | Max facility supply water temp | Practical implication |
-| --- | --- | --- |
-| W17 (old W1) | 17°C (62.6°F) | Chillers still required, similar to legacy air-cooled temps |
-| W27 (old W2) | 27°C (80.6°F) | Chillers still typically required in most climates |
-| W32 (old W3) | 32°C (89.6°F) | The "sweet spot" for many modern operators — allows significant free-cooling hours using dry coolers or adiabatic towers |
-| W40 (new in 5th edition) | 40°C (104°F) | Added because several manufacturers design liquid-cooled solutions operating around 40°C entering facility water |
-| W45 (old W4) | 45°C (113°F) | "Warm water" cooling — mechanical chillers can often be eliminated entirely, even in hot climates, relying solely on heat rejection to atmosphere |
-| W+ (old W5) | \\>45°C | Rare, mostly experimental/heat-reuse focused |
 
 
 
@@ -284,7 +311,7 @@ T_{w, in, calibr} = 95 F = 35 C
 
 T_{wb, calibr} = 78 F
 
-D_{outside, air} \in  [62.8, 605] kCFM ([62.8, 302]  for single Cell and [126, 605] for Double Cell \cite{Series3000CoolingT} (pages 1-2))
+D_{outside, air} \in  [62.8, 605] kCFM ([62.8, 302]  for single Cell and [126, 605] for Double Cell \cite{Series3000CoolingT} (pages 1-2))k
 
 D_{outside, air} \in  [5.0,  291] kCFM  \cite{SeriesVCoolingT} (pages 1-6)
 

@@ -10,6 +10,7 @@ import plotly.express as px
 import matplotlib.pyplot as plt
 from scipy.linalg import expm, inv, eig
 import numpy as np
+import json
 
 
 # ---------------------------------------------------------------------------
@@ -69,10 +70,25 @@ def find_n_min(boundaries: tuple, target_cool_capa: float):
         return k
 
 
+
 # ---------------------------------------------------------------------------
-# Data Center immutable values during simulation: 
+# Parameters
 # ---------------------------------------------------------------------------
+path = r"C:\Users\andre\UniMelb\ChatGPT_Thermo_modelling\ep_chiller_cache\chiller_database.json"
+
+
+with open(path, "r", encoding="utf-8") as file:
+    CHILLER_CACHE_JSON =  json.load(file)
+
+L_sorted_chiller_models = []
+for model_name in CHILLER_CACHE_JSON:
+    data = CHILLER_CACHE_JSON[model_name]
+    tuples = (data['reference_capacity_kW'], model_name)
+    L_sorted_chiller_models.append(tuples)
+L_sorted_chiller_models = sorted(L_sorted_chiller_models, key=lambda x: x[0])
+
 DT = 1 / 60 # in hours DEPENDS ON DATASET GRANULARITY 
+OUTSIDE_TEMP = 18   #C
 
 CRAC_CC_range = (214, 455)
 Cool_Tower_CC_range = (53.5, 22300) # kW
@@ -80,7 +96,6 @@ fans_cool_t_fr = 3 # m3/s
 # SERVER
 T_CPU_TJMAX = 95 # C
 T_CPU_THERMTRIP = 115 # C
-
 # ---------------------------------------------------------------------------
 # ASSUMPTION VALUES FOR RETROENGINEERING DATA CENTER: 
 # ---------------------------------------------------------------------------
@@ -92,9 +107,7 @@ AIRFLOW_PER_HS =  12.6 * C_CFM_to_m3s # CFM in #m3/s
 ## Chiller
 evap_ratio = 2.4 #GPM / ton
 cond_ratio = 3.0 #GPM / ton
-EIR = (0.171, 0.588, 0.237)
-CAPFT =  (0.25211, 0.013241, - 0.0086373,  0.085811, - 0.0042612, 0.0086619)
-
+DEFAULT_MODEL = {'reference_capacity_kW' : 150 , 'reference_cop': 6, 'ref_chw_flow_m3s': evap_ratio * 150 * C_GPM_to_m3s / C_ton_evap_to_kW , 'ref_cond_flow_m3s' : cond_ratio * 150 * C_GPM_to_m3s / C_ton_evap_to_kW , 'min_plr' : 0, 'max_plr': 1.5, 'condenser_type' : 'WaterCooled' , 'capft' : { 'coeffs': [0.25211, 0.013241, - 0.0086373,  0.085811, - 0.0042612, 0.0086619]}, 'eirfplr': {'coeffs': [0.171, 0.588, 0.237]} }
 ## CRACs
 AIRFLOW_PER_COOL_CAPA = 400 # CFM / ton
 EPSILON_RATED = 0.7
@@ -168,8 +181,8 @@ class CoolingTower:
 
         self.waterflow = None
         self.airflow: float = None
-        self.leaving_water_temp: float = ROOM_INITIAL_TEMP -10 
-        self.entering_water_temp: float = ROOM_INITIAL_TEMP
+        self.leaving_water_temp: float = OUTSIDE_TEMP
+        self.entering_water_temp: float = None
 
         self.version: str = version
         self.wet_bulb_temp: float = 0
@@ -199,22 +212,19 @@ class CoolingTower:
 # ---------------------------------------------------------------------------
 
 
-class Chiller_water_cooled:
+class Chiller:
     def __init__(self, CHILLER_INFO):
-        Q_rated_kW, cop_ref, EIR, CAPFT, set_p, evap_cc_ratio, cond_cc_ratio = CHILLER_INFO
+        set_p, model = CHILLER_INFO
 
 
-        self.Q_rated = Q_rated_kW
-        self.cop_ref = cop_ref # initial value, varies with plr
-        self.EIR_params = EIR
-        self.CAPFT_params = CAPFT
         self.setpoint_nom_temp = set_p
+        self.model = model
         self.setpoint_flexibility_temp = set_p
         self.time = 0
-        self.evap_flow_rate =  self.Q_rated   * evap_cc_ratio *C_GPM_to_m3s / C_ton_evap_to_kW # m3/s
-        self.cond_flow_rate =  self.Q_rated * C_GPM_to_m3s / C_ton_evap_to_kW *cond_cc_ratio    # m3/s
+        self.evap_flow_rate =  self.model['ref_chw_flow_m3s'] if isinstance(self.model['ref_chw_flow_m3s'] , float) else DEFAULT_MODEL['ref_chw_flow_m3s']
+        self.cond_flow_rate = self.model['ref_cond_flow_m3s']if isinstance(self.model['ref_cond_flow_m3s'] , float) else DEFAULT_MODEL['ref_cond_flow_m3s']
 
-        self.evap_w_out_temp = ROOM_INITIAL_TEMP
+        self.evap_w_out_temp = set_p
         self.evap_w_in_temp = ROOM_INITIAL_TEMP
         self.cond_w_out_temp = ROOM_INITIAL_TEMP
         self.cond_w_in_temp = ROOM_INITIAL_TEMP
@@ -224,15 +234,19 @@ class Chiller_water_cooled:
         # print("chiller cooling capa:", self.Q_rated)
 
     def cop(self, PLR):
+        min_PLR, max_PLR = self.model['min_plr'], self.model['max_plr']
+        PLR = min(max_PLR, max(min_PLR, PLR) )
         denom = 0
+        cop_ref = self.model['reference_cop']
+        EIR_params = self.model['eirfplr']['coeffs']
         for i in range(3):
-            denom += self.EIR_params[i]*PLR**i
-        return self.cop_ref / denom
+            denom += EIR_params[i]*PLR**i
+        return cop_ref / denom
 
     def CAPFT(self):
-        'Sort du chapeau'
+        CAPFT_params = self.model['capft']['coeffs']
         T_e, T_c = self.evap_w_in_temp, self.cond_w_in_temp
-        a, b, c,d,e,f = self.CAPFT_params
+        a, b, c,d,e,f = CAPFT_params
 
         val = a + b*T_e + c*T_e**2 + d*T_c + e*T_c**2 + f*T_e*T_c
         return max(0, val)
@@ -240,8 +254,8 @@ class Chiller_water_cooled:
     def update_w_out(self) -> bool:
 
         C_w_evap, C_w_cond = self.evap_flow_rate*RHO_CP_WATER, self.cond_flow_rate*RHO_CP_WATER
-
-        Q_max = self.CAPFT()* self.Q_rated
+        Q_rated = self.model['reference_capacity_kW']
+        Q_max = self.CAPFT()* Q_rated
 
         self.setpoint_flexibility_temp = setpoint(self.evap_w_in_temp, self.evap_w_out_temp, 'constant', self.time)
         Q_demand_flex = min(C_w_evap * ( self.evap_w_in_temp - self.setpoint_flexibility_temp), Q_max)
@@ -250,8 +264,8 @@ class Chiller_water_cooled:
 
         Q_demand = C_w_evap * ( self.evap_w_in_temp - self.setpoint_nom_temp)
 
-        PLR = Q_demand / self.Q_rated # can be higher than 1
-        PLR_flex = Q_demand_flex / self.Q_rated # can be higher than 1
+        PLR = Q_demand / Q_rated # can be higher than 1
+        PLR_flex = Q_demand_flex / Q_rated # can be higher than 1
         COP = self.cop(PLR)
         COP_flex = self.cop(PLR_flex)
         self.power_kW_nom = Q_demand / COP
@@ -399,31 +413,29 @@ class DataCenterFacility:
 
     
 
-    def __init__(self , CRAC_INFO: tuple, CHILLER_INFO: tuple, EVAP_LOOP_INFO: tuple, COOLING_TOWER_INFO, dt):
+    def __init__(self , CRAC_INFO: tuple, CHILLER_INFO: tuple, EVAP_LOOP_INFO: tuple, COOLING_TOWER_INFO,  dt):
         # Important to have exact correspondance between the attribute and the class represented
         self.time_utc: float = 0.0
         self.time_resolution = dt
         # Instantiate subsystems
-        self.OutdoorEnvironment = OutdoorEnvironment(ambient_temp=28.0, relative_humidity=0.55)
+        self.OutdoorEnvironment = OutdoorEnvironment(ambient_temp=OUTSIDE_TEMP, relative_humidity=0.55)
 
-        self.Chiller_water_cooled = Chiller_water_cooled(CHILLER_INFO) 
-
-        self.CoolingTower = CoolingTower(COOLING_TOWER_INFO) 
+        self.Chiller = Chiller(CHILLER_INFO) 
+        if COOLING_TOWER_INFO:
+            self.CoolingTower = CoolingTower(COOLING_TOWER_INFO) 
 
         self.Evaporator_loop = Evaporator_loop(EVAP_LOOP_INFO)
-        self.Evaporator_loop.calibration(self.Chiller_water_cooled.evap_flow_rate, self.Chiller_water_cooled.setpoint_nom_temp)
+        self.Evaporator_loop.calibration(self.Chiller.evap_flow_rate, self.Chiller.setpoint_nom_temp)
 
         self.entropy_violated: bool = True
 
         self.ITRoom = ITRoom(CRAC_INFO)
-        self.ITRoom.calibration(self.Chiller_water_cooled.evap_flow_rate)
-
-        self.initial_condition(ROOM_INITIAL_TEMP, SETPOINT)
+        self.ITRoom.calibration(self.Chiller.evap_flow_rate)
     # --- Equations -----------------------------------------------------------
 
-    def initial_condition(self, cooltower_leaving_temp: float, setp) -> None:
-        self.CoolingTower.leaving_water_temp = cooltower_leaving_temp
-        self.Chiller_water_cooled.evap_w_out_temp = setp
+    # def initial_condition(self, cooltower_leaving_temp: float, setp) -> None:
+    #     self.CoolingTower.leaving_water_temp = cooltower_leaving_temp
+    #     self.Chiller.evap_w_out_temp = setp
 
     def heat_flow(self)-> bool:
         entropy_viol = False 
@@ -443,20 +455,24 @@ class DataCenterFacility:
         # --------------------------------------------------------------------
         # CHILLER contribution
         # --------------------------------------------------------------------
-        self.Chiller_water_cooled.evap_w_in_temp = w_slice_to_chiller
-        self.Chiller_water_cooled.cond_w_in_temp = self.CoolingTower.leaving_water_temp
-        # self.Chiller_water_cooled.setpoint_nom_temp = 
-        entropy_viol += self.Chiller_water_cooled.step(self.time_resolution)
-        w_slice_chiller_to_loop = self.Chiller_water_cooled.evap_w_out_temp
+        self.Chiller.evap_w_in_temp = w_slice_to_chiller
 
+        if self.Chiller.model['condenser_type'] == 'WaterCooled':
+            # --------------------------------------------------------------------
+            # COOLING TOWER contribution
+            # --------------------------------------------------------------------
+            self.Chiller.cond_w_in_temp = self.CoolingTower.leaving_water_temp
+            entropy_viol += self.Chiller.step(self.time_resolution)
+            # self.Chiller.setpoint_nom_temp = 
+            self.CoolingTower.entering_water_temp = self.Chiller.cond_w_out_temp
+            self.CoolingTower.wet_bulb_temp = self.OutdoorEnvironment.wet_bulb_temp
+            entropy_viol += self.CoolingTower.step()
+        else:
+            self.Chiller.cond_w_in_temp = self.OutdoorEnvironment.ambient_temp
+            entropy_viol += self.Chiller.step(self.time_resolution)
+
+        w_slice_chiller_to_loop = self.Chiller.evap_w_out_temp
         self.Evaporator_loop.update(w_slice_crac_to_loop, w_slice_chiller_to_loop)
-        # --------------------------------------------------------------------
-        # COOLING TOWER contribution
-        # --------------------------------------------------------------------
-        self.CoolingTower.entering_water_temp = self.Chiller_water_cooled.cond_w_out_temp
-        self.CoolingTower.wet_bulb_temp = self.OutdoorEnvironment.wet_bulb_temp
-        entropy_viol += self.CoolingTower.step()
-
         return entropy_viol
 
     def update_dict(self, dict):
@@ -491,7 +507,7 @@ class DataCenterFacility:
 
 
 
-def retroEngineering_data_center(PUE: float, size_in_kW: float, COP_ref: float,  CC_CRAC_boundaries_kW: tuple, CC_Cool_Tower_boundaries_kW: tuple, time_resolution,  Oversizing = 1, Tier = None)-> DataCenterFacility:
+def retroEngineering_data_center(PUE: float, size_in_kW: float,  CC_CRAC_boundaries_kW: tuple, CC_Cool_Tower_boundaries_kW: tuple, time_resolution,  Oversizing = 1, Tier = None)-> DataCenterFacility:
     '''
     Gives adapted cooling system and server relying on the Chiller as the central piece of the cooling system. Power consummed to size the IT hardware 
     For a given Cooling Capacity of Chiller, the function always give the same Cooling tower and CRAC capacities. No randomness in them.'''
@@ -504,7 +520,10 @@ def retroEngineering_data_center(PUE: float, size_in_kW: float, COP_ref: float, 
     
 
     CC_Chiller_nom =  max_power_IT  # CC = Cooling Capacity
-    CHILLER_INFO = (CC_Chiller_nom, COP_ref, EIR, CAPFT,  SETPOINT, evap_ratio, cond_ratio)
+    model = chose_model(CC_Chiller_nom, 10)
+    # model = DEFAULT_MODEL
+    COP_ref = model['reference_cop']
+    CHILLER_INFO = (SETPOINT, model)
     # -----------------------------
     # CRACS
     # -----------------------------
@@ -513,32 +532,36 @@ def retroEngineering_data_center(PUE: float, size_in_kW: float, COP_ref: float, 
     n_cracs = find_n_min(CC_CRAC_boundaries_kW, Q_evap)
     CRAC_INFO = (n_cracs, (Q_evap/n_cracs , AIRFLOW_PER_COOL_CAPA, EPSILON_RATED))
 
+
     # -----------------------------
     # Cooling Tower
     # -----------------------------
-    
-    # COP_avg = 1/(1 - PUE)
-    Q_cond = Q_evap* (1 + 1 / COP_ref)
+    if model['condenser_type'] =='WaterAirCooled':
+        # COP_avg = 1/(1 - PUE)
+        Q_cond = Q_evap* (1 + 1 / COP_ref)
 
-    n_coolingT_cells = find_n_min(CC_Cool_Tower_boundaries_kW, Q_cond)
+        n_coolingT_cells = find_n_min(CC_Cool_Tower_boundaries_kW, Q_cond)
 
-    COOLING_TOWER_INFO = (Q_cond, n_coolingT_cells, EPSILON, min_approach_temp, 'simplified')
+        COOLING_TOWER_INFO = (Q_cond, n_coolingT_cells, EPSILON, min_approach_temp, 'simplified')
+    else: COOLING_TOWER_INFO = None
+
+    # -----------------------------
+    # Evap loop
+    # -----------------------------
     EVAP_LOOP_INFO = (CC_Chiller_nom, vol_ton_ratio, time_resolution)
     print(f"cooling system power:{Q_evap/COP_ref} out of {size_in_kW} kW")
-    # Server end
+        # Server end
 
 
     return DataCenterFacility(CRAC_INFO, CHILLER_INFO, EVAP_LOOP_INFO, COOLING_TOWER_INFO, time_resolution)
 
 def MONTE_CARLO(n_simulations, ):
-    COP_ref_boundaries = (5.5, 6.5) 
     PUE_boundaries = (1.2, 1.6)
-    sizes_boundaries_kW = (50, 100000)
+    sizes_boundaries_kW = (15, 5000)
     random_PUE = rd.uniform(1.2, 1.6)
     random_size = rd.uniform(50, 100000)
-    random_COP_ref = rd.uniform(5.5, 6.5)
 
-    List_data_centers = [retroEngineering_data_center(random_PUE[k], random_size[k], random_COP_ref[k], CRAC_CC_range, Cool_Tower_CC_range) for k in range(n_simulations) ]
+    List_data_centers = [retroEngineering_data_center(random_PUE[k], random_size[k], CRAC_CC_range, Cool_Tower_CC_range) for k in range(n_simulations) ]
     return List_data_centers
 # ---------------------------------------------------------------------------
 # Entry point
@@ -563,6 +586,23 @@ def initialise_dict_for_plot(keys: list[str]) -> dict:
             print('Wrong_initialisation_for:', elt)
     return {key : [] for key in keys }
 
+def chose_model(reference_capacity_kW,range_tol_kW):
+    # Limited at 1 chiller. No available if cooling capacity demanded too big (> 5.5 MW)
+    L_choice = []
+    if reference_capacity_kW  > L_sorted_chiller_models[-1][0]:
+        print('Limited at 1 chiller. No available if cooling capacity demanded too big (> 5.5 MW)')
+        return None
+    elif reference_capacity_kW < L_sorted_chiller_models[0][0]:
+        return CHILLER_CACHE_JSON[L_sorted_chiller_models[0][1]]
+    index = 0
+    while reference_capacity_kW > L_sorted_chiller_models[index][0] :
+        index +=1
+    j = index       
+    while L_sorted_chiller_models[j][0] <= L_sorted_chiller_models[index][0] + range_tol_kW and j < len(L_sorted_chiller_models):
+        L_choice.append(L_sorted_chiller_models[j])
+        j+=1
+    n_choice = rd.randint(0, len(L_choice)-1)
+    return CHILLER_CACHE_JSON[L_choice[n_choice][1]]
 
 def plotting(dict: dict[List]) -> None:
     '''
@@ -613,6 +653,7 @@ def plotting(dict: dict[List]) -> None:
     plt.show()
 
 
+
     print("Number of points plotted", len(dict['time_utc']))
 
 if __name__ == "__main__":
@@ -624,7 +665,7 @@ if __name__ == "__main__":
 
 
     Liste = [
-        'wet_bulb_temp',
+        'ambient_temp',
         'cond_w_in_temp',
         'cond_w_out_temp',
         'evap_w_in_temp',
@@ -641,13 +682,14 @@ if __name__ == "__main__":
     dict_for_plot = initialise_dict_for_plot(Liste)
 
 
-    dc = retroEngineering_data_center(1.6, 160, 6, CRAC_CC_range, Cool_Tower_CC_range, 10)
-
+    dc = retroEngineering_data_center(1.6, 160, CRAC_CC_range, Cool_Tower_CC_range, 10)
+    print(dc.Chiller.model)
 
     path = r"C:\Users\andre\UniMelb\Validation_data\cooling_system_synthetic_inputs_5_scenarios\01_steady_state_constant.csv"
     dataset_input = pd.read_csv(path)
 
     N_DATA_INPUT = len(dataset_input['time_utc'])
+    print(dict_for_plot)
     for j in range(N_DATA_INPUT):
 
         dc.step(time_utc= dataset_input['time_utc'][j], 

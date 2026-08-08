@@ -91,15 +91,16 @@ Grid’5000 Kwollect
 #### Workload and resource utilization
 
 My work did not focus on worklod management for data centers. However there is a quite important amount of data sets and traces about data center requests. 
-#### Data analyzed
+#### Data available
+
+These data concerned more Workload management and utilisation profiles, less interesting for my work, but can be usefull for further projects.
 
 
 | Entry        | Corresponding dataset/site               | What is actually observed| DC level represented    | Best use for DC-behaviour studies  |
 | --- | --------- | - | - | --- |
 | ScienceDB link                | **https://www.scidb.cn/en/detail?dataSetId=60dfb844a69842c1b7e7ca3ba8e09791** | Detailed three-phase electrical quantities at CRAC, rack-power and distribution-board meters (important metric: Active_Threephase_Power)| Building / room / rack electrical        | Cooling-vs-IT electricity, seasonality, load trends |
 | Google cluster traces v3      | **https://github.com/google/cluster-data/blob/master/ClusterData2019.md**     | Jobs/tasks, scheduler events, CPU/RAM usage, machine state | Compute orchestration   | Production workload and scheduling behaviour; **not energy/cooling** |
-| Thailand energydata-master-v2 | Most likely **cchantra/energydata**      | A sample of the Kasetsart electrical dataset + analysis code                | Same university DC      | Small-scale experimentation with the Kasetsart data |
-| NLR ESIF PUE | **NLR HPC Facility PUE Data**            | IT kW + cooling/HVAC/pumps/lighting + PUE/ERE + weather    | Whole facility          | Facility overhead, PUE, weather/cooling/heat-reuse behaviour         |
+
 | Marconi100   | **M100 ExaData**        | Jobs + node telemetry + temperatures + power + GPU + cooling + facility + alarms + weather   | Full cross-layer HPC system              | By far the richest production DC/HPC cross-layer dataset             |
 | Grid'5000 Kwollect            | **Kwollect metrology service**           | Wattmeters, BMC, PDU, temperature, GPU, network, OS metrics, etc.           | Individual experimental nodes/components | Controlled power/performance/thermal experiments    |
 
@@ -123,7 +124,9 @@ Usefull for seeing the paterns of data centers consumption.
 ![UKPN_extract2](./pictures/UKPN_screenshot_hhutilization2.png)
 
 #### NLR
+NLR HPC Facility ESIF with metrics (ere, pue) and powers from their very efficient data center.
 
+Showcases a very advanced cooling system. Extremely low PUE
 
 ![NLR_All](./pictures/NLR_all_powers.png)
 ![NLR_Cooilng](./pictures/NLR_without_IT.png)
