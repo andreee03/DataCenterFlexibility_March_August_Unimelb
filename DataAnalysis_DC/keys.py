@@ -1,0 +1,36 @@
+['timestamp', 
+ 
+ 'ambient_avg', 'ambient_std', 'ambient_min', 'ambient_max',
+  
+   'dimm0_temp_avg', 'dimm0_temp_std', 'dimm0_temp_min', 'dimm0_temp_max', 'dimm10_temp_avg', 'dimm10_temp_std', 'dimm10_temp_min', 'dimm10_temp_max', 'dimm11_temp_avg', 'dimm11_temp_std', 'dimm11_temp_min', 'dimm11_temp_max', 'dimm12_temp_avg', 'dimm12_temp_std', 'dimm12_temp_min', 'dimm12_temp_max', 'dimm13_temp_avg', 'dimm13_temp_std', 'dimm13_temp_min', 'dimm13_temp_max', 'dimm14_temp_avg', 'dimm14_temp_std', 'dimm14_temp_min', 'dimm14_temp_max', 'dimm15_temp_avg', 'dimm15_temp_std', 'dimm15_temp_min', 'dimm15_temp_max', 'dimm1_temp_avg', 'dimm1_temp_std', 'dimm1_temp_min', 'dimm1_temp_max', 'dimm2_temp_avg', 'dimm2_temp_std', 'dimm2_temp_min', 'dimm2_temp_max', 'dimm3_temp_avg', 'dimm3_temp_std', 'dimm3_temp_min', 'dimm3_temp_max', 'dimm4_temp_avg', 'dimm4_temp_std', 'dimm4_temp_min', 'dimm4_temp_max', 'dimm5_temp_avg', 'dimm5_temp_std', 'dimm5_temp_min', 'dimm5_temp_max', 'dimm6_temp_avg', 'dimm6_temp_std', 'dimm6_temp_min', 'dimm6_temp_max', 'dimm7_temp_avg', 'dimm7_temp_std', 'dimm7_temp_min', 'dimm7_temp_max', 'dimm8_temp_avg', 'dimm8_temp_std', 'dimm8_temp_min', 'dimm8_temp_max', 'dimm9_temp_avg', 'dimm9_temp_std', 'dimm9_temp_min', 'dimm9_temp_max', 
+   
+
+    'fan0_0_avg', 'fan0_0_std', 'fan0_0_min', 'fan0_0_max', 'fan0_1_avg', 'fan0_1_std', 'fan0_1_min', 'fan0_1_max', 'fan1_0_avg', 'fan1_0_std', 'fan1_0_min', 'fan1_0_max', 'fan1_1_avg', 'fan1_1_std', 'fan1_1_min', 'fan1_1_max', 'fan2_0_avg', 'fan2_0_std', 'fan2_0_min', 'fan2_0_max', 'fan2_1_avg', 'fan2_1_std', 'fan2_1_min', 'fan2_1_max', 'fan3_0_avg', 'fan3_0_std', 'fan3_0_min', 'fan3_0_max', 'fan3_1_avg', 'fan3_1_std', 'fan3_1_min', 'fan3_1_max', 
+    
+
+    'fan_disk_power_avg', 'fan_disk_power_std', 'fan_disk_power_min', 'fan_disk_power_max', 
+    
+    'gpu0_core_temp_avg', 'gpu0_core_temp_std', 'gpu0_core_temp_min', 'gpu0_core_temp_max', 'gpu0_mem_temp_avg', 'gpu0_mem_temp_std', 'gpu0_mem_temp_min', 'gpu0_mem_temp_max', 'gpu1_core_temp_avg', 'gpu1_core_temp_std', 'gpu1_core_temp_min', 'gpu1_core_temp_max', 'gpu1_mem_temp_avg', 'gpu1_mem_temp_std', 'gpu1_mem_temp_min', 'gpu1_mem_temp_max', 'gpu3_core_temp_avg', 'gpu3_core_temp_std', 'gpu3_core_temp_min', 'gpu3_core_temp_max', 'gpu3_mem_temp_avg', 'gpu3_mem_temp_std', 'gpu3_mem_temp_min', 'gpu3_mem_temp_max', 'gpu4_core_temp_avg', 'gpu4_core_temp_std', 'gpu4_core_temp_min', 'gpu4_core_temp_max', 'gpu4_mem_temp_avg', 'gpu4_mem_temp_std', 'gpu4_mem_temp_min', 'gpu4_mem_temp_max', 
+    
+    'gv100card0_avg', 'gv100card0_std', 'gv100card0_min', 'gv100card0_max', 'gv100card1_avg', 'gv100card1_std', 'gv100card1_min', 'gv100card1_max', 'gv100card3_avg', 'gv100card3_std', 'gv100card3_min', 'gv100card3_max', 'gv100card4_avg', 'gv100card4_std', 'gv100card4_min', 'gv100card4_max', 
+    
+    
+    'p0_core12_temp_avg', 'p0_core12_temp_std', 'p0_core12_temp_min', 'p0_core12_temp_max', 'p0_core13_temp_avg', 'p0_core13_temp_std', 'p0_core13_temp_min', 'p0_core13_temp_max', 'p0_core14_temp_avg', 'p0_core14_temp_std', 'p0_core14_temp_min', 'p0_core14_temp_max', 'p0_core15_temp_avg', 'p0_core15_temp_std', 'p0_core15_temp_min', 'p0_core15_temp_max', 'p0_core16_temp_avg', 'p0_core16_temp_std', 'p0_core16_temp_min', 'p0_core16_temp_max', 'p0_core17_temp_avg', 'p0_core17_temp_std', 'p0_core17_temp_min', 'p0_core17_temp_max', 'p0_core18_temp_avg', 'p0_core18_temp_std', 'p0_core18_temp_min', 'p0_core18_temp_max', 'p0_core19_temp_avg', 'p0_core19_temp_std', 'p0_core19_temp_min', 'p0_core19_temp_max', 'p0_core20_temp_avg', 'p0_core20_temp_std', 'p0_core20_temp_min', 'p0_core20_temp_max', 'p0_core21_temp_avg', 'p0_core21_temp_std', 'p0_core21_temp_min', 'p0_core21_temp_max', 'p0_core2_temp_avg', 'p0_core2_temp_std', 'p0_core2_temp_min', 'p0_core2_temp_max', 'p0_core3_temp_avg', 'p0_core3_temp_std', 'p0_core3_temp_min', 'p0_core3_temp_max', 'p0_core4_temp_avg', 'p0_core4_temp_std', 'p0_core4_temp_min', 'p0_core4_temp_max', 'p0_core5_temp_avg', 'p0_core5_temp_std', 'p0_core5_temp_min', 'p0_core5_temp_max', 'p0_core6_temp_avg', 'p0_core6_temp_std', 'p0_core6_temp_min', 'p0_core6_temp_max', 'p0_core7_temp_avg', 'p0_core7_temp_std', 'p0_core7_temp_min', 'p0_core7_temp_max', ''
+    ''
+    'p0_io_power_avg', 'p0_io_power_std', 'p0_io_power_min', 'p0_io_power_max', 
+    
+    'p0_mem_power_avg', 'p0_mem_power_std', 'p0_mem_power_min', 'p0_mem_power_max', 
+    
+    'p0_power_avg', 'p0_power_std', 'p0_power_min', 'p0_power_max', 
+    
+    'p0_vdd_temp_avg', 'p0_vdd_temp_std', 'p0_vdd_temp_min', 'p0_vdd_temp_max', 
+  
+     
+      'pcie_avg', 'pcie_std', 'pcie_min', 'pcie_max', 
+      
+      'ps0_input_power_avg', 'ps0_input_power_std', 'ps0_input_power_min', 'ps0_input_power_max', 'ps0_input_voltag_avg', 'ps0_input_voltag_std', 'ps0_input_voltag_min', 'ps0_input_voltag_max', 'ps0_output_curre_avg', 'ps0_output_curre_std', 'ps0_output_curre_min', 'ps0_output_curre_max', 'ps0_output_volta_avg', 'ps0_output_volta_std', 'ps0_output_volta_min', 'ps0_output_volta_max',
+       
+    'ps1_input_power_avg', 'ps1_input_power_std', 'ps1_input_power_min', 'ps1_input_power_max', 'ps1_input_voltag_avg', 'ps1_input_voltag_std', 'ps1_input_voltag_min', 'ps1_input_voltag_max', 'ps1_output_curre_avg', 'ps1_output_curre_std', 'ps1_output_curre_min', 'ps1_output_curre_max', 'ps1_output_volta_avg', 'ps1_output_volta_std', 'ps1_output_volta_min', 'ps1_output_volta_max', 
+    
+    
+    'total_power_avg', 'total_power_std', 'total_power_min', 'total_power_max', 'value']

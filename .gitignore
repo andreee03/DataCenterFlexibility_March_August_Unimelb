@@ -1,0 +1,14 @@
+# Ignore everything
+*
+
+# But allow directories, so Git can search inside them
+!*/
+
+# Keep Python files
+!*.py
+
+# Keep Markdown files
+!*.md
+
+# Keep this file itself
+!.gitignore
