@@ -96,6 +96,14 @@ fans_cool_t_fr = 3 # m3/s
 # SERVER
 T_CPU_TJMAX = 95 # C
 T_CPU_THERMTRIP = 115 # C
+
+season_conditions = {
+    "summer": (23.8, 0.47),
+    "autumn": (19.6, 0.53),
+    "winter": (13.7, 0.60),
+    "spring": (18.3, 0.51),
+}
+
 # ---------------------------------------------------------------------------
 # ASSUMPTION VALUES FOR RETROENGINEERING DATA CENTER: 
 # ---------------------------------------------------------------------------
@@ -107,10 +115,11 @@ AIRFLOW_PER_HS =  12.6 * C_CFM_to_m3s # CFM in #m3/s
 ## Chiller
 evap_ratio = 2.4 #GPM / ton
 cond_ratio = 3.0 #GPM / ton
-DEFAULT_MODEL = {'reference_capacity_kW' : 150 , 'reference_cop': 6, 'ref_chw_flow_m3s': evap_ratio * 150 * C_GPM_to_m3s / C_ton_evap_to_kW , 'ref_cond_flow_m3s' : cond_ratio * 150 * C_GPM_to_m3s / C_ton_evap_to_kW , 'min_plr' : 0, 'max_plr': 1.5, 'condenser_type' : 'WaterCooled' , 'capft' : { 'coeffs': [0.25211, 0.013241, - 0.0086373,  0.085811, - 0.0042612, 0.0086619]}, 'eirfplr': {'coeffs': [0.171, 0.588, 0.237]} }
+DEFAULT_MODEL = {'reference_capacity_kW' : 150 , 'reference_cop': 6, 'ref_leaving_chw_temp_C':7.2, 'ref_chw_flow_m3s': evap_ratio * 150 * C_GPM_to_m3s / C_ton_evap_to_kW , 'ref_cond_flow_m3s' : cond_ratio * 150 * C_GPM_to_m3s / C_ton_evap_to_kW , 'min_plr' : 0, 'max_plr': 1.5, 'condenser_type' : 'WaterCooled' , 'capft' : { 'coeffs': [0.25211, 0.013241, - 0.0086373,  0.085811, - 0.0042612, 0.0086619]}, 'eirfplr': {'coeffs': [0.171, 0.588, 0.237]} }
 ## CRACs
 AIRFLOW_PER_COOL_CAPA = 400 # CFM / ton
 EPSILON_RATED = 0.7
+SECONDARY_LOOP_DELTA_T = 5  #C
 # CoolingTower
 EPSILON = (95 - 85) / (95 - 78)
 min_approach_temp = 3 # \in [2.5, 4]
@@ -118,15 +127,6 @@ min_approach_temp = 3 # \in [2.5, 4]
 vol_ton_ratio = 10 # Gall / ton
 
 
-def setpoint(T_evap_in, T_last_setpoint, shape, t, a = None, T_bang= None ):
-    if shape == 'stop':
-        return T_evap_in
-    elif shape == 'linear':
-        return T_evap_in + a * t
-    elif shape == 'bang-bang':
-        return T_bang
-    elif shape == 'constant':
-        return T_last_setpoint
 # ---------------------------------------------------------------------------
 # 1. Outdoor Environment
 # ---------------------------------------------------------------------------
@@ -214,17 +214,17 @@ class CoolingTower:
 
 class Chiller:
     def __init__(self, CHILLER_INFO):
-        set_p, model = CHILLER_INFO
+        model = CHILLER_INFO
 
 
-        self.setpoint_nom_temp = set_p
         self.model = model
-        self.setpoint_flexibility_temp = set_p
+        self.setpoint_nom_temp = self.model['ref_leaving_chw_temp_C']
+        self.setpoint_flexibility_temp = None
         self.time = 0
         self.evap_flow_rate =  self.model['ref_chw_flow_m3s'] if isinstance(self.model['ref_chw_flow_m3s'] , float) else DEFAULT_MODEL['ref_chw_flow_m3s']
         self.cond_flow_rate = self.model['ref_cond_flow_m3s']if isinstance(self.model['ref_cond_flow_m3s'] , float) else DEFAULT_MODEL['ref_cond_flow_m3s']
 
-        self.evap_w_out_temp = set_p
+        self.evap_w_out_temp = self.setpoint_nom_temp
         self.evap_w_in_temp = ROOM_INITIAL_TEMP
         self.cond_w_out_temp = ROOM_INITIAL_TEMP
         self.cond_w_in_temp = ROOM_INITIAL_TEMP
@@ -257,12 +257,11 @@ class Chiller:
         Q_rated = self.model['reference_capacity_kW']
         Q_max = self.CAPFT()* Q_rated
 
-        self.setpoint_flexibility_temp = setpoint(self.evap_w_in_temp, self.evap_w_out_temp, 'constant', self.time)
         Q_demand_flex = min(C_w_evap * ( self.evap_w_in_temp - self.setpoint_flexibility_temp), Q_max)
         # Q_demand = min(C_w_evap * ( self.evap_w_in_temp - self.setpoint_nom_temp), Q_max)
 
 
-        Q_demand = C_w_evap * ( self.evap_w_in_temp - self.setpoint_nom_temp)
+        Q_demand = min(C_w_evap * ( self.evap_w_in_temp - self.setpoint_nom_temp), Q_max)
 
         PLR = Q_demand / Q_rated # can be higher than 1
         PLR_flex = Q_demand_flex / Q_rated # can be higher than 1
@@ -291,11 +290,12 @@ class Chiller:
 class Evaporator_loop:
     # Model a water loop with buffer tank and can transform into 
     def __init__(self, EVAP_LOOP_INFO):
-        cc_chiller, gall_per_ton, time_resolution = EVAP_LOOP_INFO
+        cc_chiller, gall_per_ton, sl_delta_t, time_resolution = EVAP_LOOP_INFO
 
         self.volume = cc_chiller  * gall_per_ton * C_gallon_to_m3 / C_ton_evap_to_kW   # m3
         self.n_slices = None
         self.water = None
+        self.secondary_loop_delta_T = sl_delta_t
 
         self.dt = time_resolution
         self.flow_rate = None
@@ -325,7 +325,7 @@ class Evaporator_loop:
         for k in range(1,self.n_slices):
             self.water[self.n_slices - k] = self.water[self.n_slices -k-1]
         self.water[0] = last_slice
-        return w_crac_temp, w_chiller_temp
+        return w_crac_temp + self.secondary_loop_delta_T, w_chiller_temp
 
 
 
@@ -337,7 +337,8 @@ class CRACUnit:
 
     # CRAC
 
-    def __init__(self, crac_info, name:str = 'CRAC_unit'):
+    def __init__(self, crac_info, name:str
+                  = 'CRAC_unit'):
         cc_crac, CFM_per_cool_capa, eps = crac_info
 
 
@@ -346,15 +347,12 @@ class CRACUnit:
 
         self.airflow = self.cool_capa_kW * CFM_per_cool_capa * C_CFM_to_m3s  / C_ton_evap_to_kW  # m3/s
         self.waterflow = None       # m3/s
-
         self.epsilon = eps
 
         self.a_out_temp = ROOM_INITIAL_TEMP
         self.a_in_temp = ROOM_INITIAL_TEMP
         self.w_out_temp = ROOM_INITIAL_TEMP
         self.w_in_temp = ROOM_INITIAL_TEMP
-
-        self.power_transfered_W: float = 0.0
 
     def calibration(self, w_fr):
         self.waterflow = w_fr
@@ -415,7 +413,7 @@ class DataCenterFacility:
 
     def __init__(self , CRAC_INFO: tuple, CHILLER_INFO: tuple, EVAP_LOOP_INFO: tuple, COOLING_TOWER_INFO,  dt):
         # Important to have exact correspondance between the attribute and the class represented
-        self.time_utc: float = 0.0
+        self.time: float = 0.0
         self.time_resolution = dt
         # Instantiate subsystems
         self.OutdoorEnvironment = OutdoorEnvironment(ambient_temp=OUTSIDE_TEMP, relative_humidity=0.55)
@@ -456,6 +454,7 @@ class DataCenterFacility:
         # CHILLER contribution
         # --------------------------------------------------------------------
         self.Chiller.evap_w_in_temp = w_slice_to_chiller
+        self.Chiller.setpoint_flexibility_temp = self.setpoint('base', self.time, 20, 50, self.Chiller.setpoint_nom_temp, 13, 5, 10)
 
         if self.Chiller.model['condenser_type'] == 'WaterCooled':
             # --------------------------------------------------------------------
@@ -484,9 +483,37 @@ class DataCenterFacility:
             else:
                 dict[key].append(round(getattr(getattr(dc, dynamic_correspondance_attributes_class[key]), key), 2))
 
-    def step(self, time_utc: float, T_hot_out: float, ambient_temp: float, relative_humidity: float, values_for_plot: dict) -> None:
+        
+    def setpoint(self, situation, t, start_time, stop_time, T_setp_nom, T_setp_hot = None, T_setp_cold = None, precool_time = None):
+        '''
+        situation variable can take values in ['precooling', 'rise_setp', 'base']
+        
+        start time : reduction of Chiller power, corresponds to an increase in setpoint, stop time: time where setpoint comes back to normal, precool_time, time where the precool setpoint is set, before start_time
+        
+        We need : precool_time < start_time < stop_time '''
 
-        self.time_utc = time_utc
+        if situation == 'precooling':
+            boole = 0
+            boole2 = 0
+            if t >= precool_time and t < start_time:
+                boole2 = 1
+            elif t >= start_time and t <= stop_time:
+                boole = 1
+            
+            return T_setp_nom + (T_setp_hot - T_setp_nom) * boole + (T_setp_cold - T_setp_nom)* boole2
+        elif situation == 'rise_setp':
+            boole = 0
+            if t >= start_time and t <= stop_time:
+                boole = 1
+            return T_setp_nom + (T_setp_hot - T_setp_nom) * boole
+        
+        elif situation == 'base':
+            return T_setp_nom
+
+        
+    def step(self, n_step: int, T_hot_out: float, outdoor_cond: tuple,values_for_plot: dict) -> None:
+        relative_humidity, ambient_temp  = outdoor_cond
+        self.time = self.time_resolution * n_step
 
         self.entropy_violated = False
         # path indoors / power
@@ -500,7 +527,7 @@ class DataCenterFacility:
         self.entropy_violated +=self.heat_flow()
         
         if self.entropy_violated:
-            print("Entropy broken, wrong heat transfer at:", time_utc)
+            print("Entropy broken, wrong heat transfer at:", self.time)
         # update values_for_plot:
 
         self.update_dict(values_for_plot)
@@ -523,7 +550,7 @@ def retroEngineering_data_center(PUE: float, size_in_kW: float,  CC_CRAC_boundar
     model = chose_model(CC_Chiller_nom, 10)
     # model = DEFAULT_MODEL
     COP_ref = model['reference_cop']
-    CHILLER_INFO = (SETPOINT, model)
+    CHILLER_INFO = (model)
     # -----------------------------
     # CRACS
     # -----------------------------
@@ -548,7 +575,7 @@ def retroEngineering_data_center(PUE: float, size_in_kW: float,  CC_CRAC_boundar
     # -----------------------------
     # Evap loop
     # -----------------------------
-    EVAP_LOOP_INFO = (CC_Chiller_nom, vol_ton_ratio, time_resolution)
+    EVAP_LOOP_INFO = (CC_Chiller_nom, vol_ton_ratio, SECONDARY_LOOP_DELTA_T, time_resolution)
     print(f"cooling system power:{Q_evap/COP_ref} out of {size_in_kW} kW")
         # Server end
 
@@ -612,13 +639,13 @@ def plotting(dict: dict[List]) -> None:
 
     pat = r"(temp|power)"
     for key in dict:
-        if key != 'time_utc':
+        if key != 'time':
                             
             match = re.search(pat, key)
 
             if match: 
                 df = pd.DataFrame({
-                    "time_utc": pd.to_datetime(dict['time_utc']),
+                    "time": dict['time'],
                     match.group(1): dict[key],
                     "Description": key 
                 })
@@ -627,7 +654,7 @@ def plotting(dict: dict[List]) -> None:
                 if 'other' not in dico_dfs.keys():
                     dico_dfs['other'] = []
                 df = pd.DataFrame({
-                                    "time_utc": dict['time_utc'],
+                                    "time": dict['time'],
                                     'other': dict[key],
                                     "Description": key 
                                 })
@@ -641,10 +668,10 @@ def plotting(dict: dict[List]) -> None:
         fig, ax = plt.subplots(figsize=(12, 6))
         for value in values:
             label = value["Description"].iloc[0]
-            ax.plot(value["time_utc"], value[category], label=str(label))
+            ax.plot(value["time"], value[category], label=str(label))
 
         ax.set_title(category)
-        ax.set_xlabel("time_utc")
+        ax.set_xlabel("time")
         ax.set_ylabel(category)
         ax.grid(True, alpha=0.3)
         ax.legend(loc="best", fontsize="small")
@@ -654,12 +681,11 @@ def plotting(dict: dict[List]) -> None:
 
 
 
-    print("Number of points plotted", len(dict['time_utc']))
+    print("Number of points plotted", len(dict['time']))
 
 if __name__ == "__main__":
-    rd.seed(42)          # reproducible run
+    # rd.seed(42)          # reproducible run
     ROOM_INITIAL_TEMP = 25
-    SETPOINT = 15
 
     dynamic_correspondance_attributes_class = create_correspondance_dico()
 
@@ -676,9 +702,8 @@ if __name__ == "__main__":
         'setpoint_nom_temp',
         'a_in_temp',
         'a_out_temp',
-        'power_transfered_W',
         'cracs_w_out_temp',
-        'time_utc'] 
+        'time'] 
     dict_for_plot = initialise_dict_for_plot(Liste)
 
 
@@ -692,9 +717,8 @@ if __name__ == "__main__":
     print(dict_for_plot)
     for j in range(N_DATA_INPUT):
 
-        dc.step(time_utc= dataset_input['time_utc'][j], 
+        dc.step(n_step= j, 
                 T_hot_out=dataset_input['input_power_IT_room_kW'][j], 
-                ambient_temp=dataset_input['ambient_temp'][j], 
-                relative_humidity=dataset_input['relative_humidity'][j],  
+                outdoor_cond=season_conditions['summer'], 
                 values_for_plot= dict_for_plot)
     plotting(dict_for_plot)

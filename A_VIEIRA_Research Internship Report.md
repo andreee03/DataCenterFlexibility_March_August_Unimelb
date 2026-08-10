@@ -232,3 +232,121 @@ Tried statically raising `epsilon` from 0.3 to 0.5 (`experiments/fixed_eps_05/`)
 | Analysis notebooks | `analysis/*.ipynb` |
 | Rejected experiment logs | `experiments/` (each folder has a `README.md` with verdict) |
 | Raw drift/dropout data | `data/replay_logs/`, `data/dropout_events.csv` |
+
+# Cooling system & Server thermal Modelling
+
+Scope of the modelling: 
+
+- A data center with an operating cooling system and server farm, that represents a set of intial conditions
+- A demand response program from grid operator
+- An active cooling system power reduction by increasing the setpoint of the chilled water
+- A new steady-state temperature situation for the data center, determined as a trade-off between SLA contract and grid compensations.
+- A change in the chiller setpoint to return back to usual operating conditions.
+
+The scope of this modelling focuses on the transitional periods for different situations, detailled in Situations Part
+
+
+Time slot for modelling and equations : several tens of minutes : 10 - 30 mins.
+
+Reasons : 
+- Estimation of thermal inertia around 5 minutes + steady state analysis for 0 to 20 mins
+
+Simplifications:
+
+- T_outdoor and Relative_Humidity are constant, for weather timescale >> 30 min event window.
+- The shape of the chiller setpoint over time will be represented as a discontinuous step function (pulse) with two or three steps: 1/ nominal setpoint 2/ flexibility setpoint 3/ precooling setpoint
+
+### Situations
+
+To catch variability...
+
+: 4 different seasons : (temperature, humidity)
+: 2 different situations : precooling (lower setpoint)+ reduce cooling until operting situation / increase setpoint then, reduce until operating situation. ( these 2 situations will not differ for the power curtailment duration but more for Power saved)
+: 5 different setpoint levels (from )
+
+#### Outdoor conditions
+
+
+A defensible set of values is:
+| Season     | Months      | Representative `(T_outdoor, RH)` |
+| ---------- | ----------- | -------------------------------: |
+| **Summer** | Dec–Jan–Feb |               **(23.8 °C, 47%)** |
+| **Autumn** | Mar–Apr–May |               **(19.6 °C, 53%)** |
+| **Winter** | Jun–Jul–Aug |               **(13.7 °C, 60%)** |
+| **Spring** | Sep–Oct–Nov |               **(18.3 °C, 51%)** |
+
+
+Justification:
+
+These are simple seasonal averages of the BoM **3 pm monthly climatological values**:
+
+-   Summer: T\=(22.4+24.2+24.7)/3\=23.8∘C, RH \=(47+47+48)/3\=47.3%
+-   Autumn: T\=(22.8+19.6+16.3)/3\=19.6∘C, RH \=(49+52+59)/3\=53.3%
+-   Winter: T\=(13.7+13.0+14.3)/3\=13.7∘C, RH \=(63+61+56)/3\=60.0%
+-   Spring: T\=(16.1+18.3+20.4)/3\=18.3∘C, RH \=(53+50+49)/3\=50.7%
+
+Those underlying monthly figures come directly from the BoM Melbourne Regional Office station.
+cite{BOM}
+
+
+### Equations 
+
+P_elec_chiller including T_outdoor : Cooling Tower or Air cooled chiller
+
+Aim: flexibility capabilities depending on the season.
+
+
+T_chilled_water to P_elec_chiller : Chiller Modelling, COP, EIR, CAP
+
+Aim: Compute P_saved
+
+T_chilled_water to T_inlet_ITRoom : CRAC equation, dry coil heat exchanger, secondary loop delta T
+
+Aim: link setpoint change to IT hardware conditions
+
+T_inlet_ITRoom to T_heatsink: heat exchanger,
+
+Aim: Take into account time scale of heatsink, smallest significant time scale of the modelling.
+
+T_heatsink and Power_CPU to T_junction: Steady State assumption, thermal resistances
+
+Aim: Compute T_junction and compare it to Physical / Hardware limits (T_jmax, T_THERMTRIP)
+
+Assumptions: Resistances and capacitances are constant, independent on the Temperature for the range of temperature considered. 
+
+#### Time of flexibility
+
+There are 2 different durations : 
+- steady state, all components of the cooling system and IT Room (servers and racks) are at equilibrium
+- dynamic transcient from one setpoint value to another. 
+
+##### Steady-state time
+
+For a given new temperature equilibrium inside a server. The amount of time allowed at the new temperature depends on CPUs utilization. Only a stochastic model, with statistical oriented methods can evaluate the increase of the risk of a potential CPU Thermtrip under these new conditions.
+
+The final decision for a specific steady-state time duration is then a trade-off between the risk management of a CPU throttling down because of heat surcharge, affecting availability and SLA conditions, and grid-side compensations.
+
+##### Transitional time
+
+The transitional time is determined by all components of the system that move towards new equilibrium and other more specific durations.
+
+My estimation includes:
+- The convexion time of the cooling fluid in the evaporator loop
+- IT Room thermal resistances and capacities 
+- Heat exchanger resistances and capacities 
+
+
+
+
+### Find parameters
+
+
+
+#### Initial conditions
+
+
+
+#### Steady-State justification
+
+
+### Results
