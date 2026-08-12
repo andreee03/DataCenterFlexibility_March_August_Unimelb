@@ -1,4 +1,4 @@
-
+### MOST RECENT VERSION
 import math
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -14,7 +14,6 @@ import numpy as np
 # DATASET
 # ---------------------------------------------------------------------------
 
-from Dataset_treatment import dataset_input 
 
 # ---------------------------------------------------------------------------
 # Physical constants
@@ -141,7 +140,8 @@ class Server_air_cooled:
     
     def update_dict(self, dict):
         for key in dict:
-            dict[key].append(round(getattr(Server_test, key),  2))
+            if key != 'time_utc':
+                dict[key].append(round(getattr(Server_test, key),  2))
            
     def update_tot_air_exit(self):
 
@@ -224,7 +224,7 @@ if __name__ == "__main__":
     for key in dynamic_correspondance_attributes_class:
         print(key)
 
-    l= [ 'airflow_per_heatsink',
+    l= [ 'time_utc', 'airflow_per_heatsink',
 'exit_air_heatsink_temp',
 'exit_air_tot_temp',
 'inlet_air_temp',
@@ -259,12 +259,15 @@ if __name__ == "__main__":
 
     dict_for_plot = initialise_dict_for_plot(l)
 
+    path = r"C:\Users\andre\UniMelb\Validation_data\cooling_system_synthetic_inputs_5_scenarios\05.csv"
+    dataset_input = pd.read_csv(path)
+    N_DATA_INPUT = len(dataset_input['time_utc'])
 
-    for j in range(60):
+    for j in range(N_DATA_INPUT):
 
-        Server_test.power_flow(time_utc= dataset_input['time_utc'][j], 
-                power_server=dataset_input['input_power_IT_room_kW'][j], 
-                T_inlet=dataset_input['ambient_temp'][j],  
+        Server_test.power_flow(time_utc= j, 
+                power_server=95* 0.7, 
+                T_inlet=dataset_input['input_power_IT_room_kW'][j],  
                 values_for_plot= dict_for_plot)
         
     plotting(dict_for_plot)

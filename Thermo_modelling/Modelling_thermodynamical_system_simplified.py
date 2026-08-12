@@ -517,7 +517,6 @@ class Server_air_cooled:
         eigenvalues = eig(A)[0]
         return f'time1:{-1/float(eigenvalues[0])},\n time2 {-1/float(eigenvalues[1])}'
 
-    
     def debug(self, R_sa):
         print('server epsilon equivalent is:', 1/(self.airflow_per_heatsink * R_sa))
     
@@ -794,7 +793,7 @@ def retroEngineering_data_center(PUE: float, size_in_kW: float, COP_ref: float, 
 
     n_coolingT_cells = find_n_min(CC_Cool_Tower_boundaries_kW, Q_cond)
 
-    COOLING_TOWER_INFO = (Q_cond, n_coolingT_cells, EPSILON_CALIBR, min_approach_temp)
+    COOLING_TOWER_INFO = (Q_cond, n_coolingT_cells, EPSILON_CALIBR, min_approach_temp, 'simplified')
     EVAP_LOOP_INFO = (CC_Chiller_nom, vol_ton_ratio, dt, False)
     print(f"cooling system power:{Q_evap/COP_ref} out of {size_in_kW} kW")
     # Server end
@@ -916,6 +915,7 @@ if __name__ == "__main__":
     print(f'N SERVER = {len(dc.ITRoom.Server_air_cooled)}')
     print(f'N CRACs = {len(dc.ITRoom.CRACUnit)}')
     N_DATA_INPUT = len(dataset_input['time_utc'])
+    print(dc.ITRoom.Server_air_cooled[0].time_scale())
 
     for j in range(N_DATA_INPUT):
 

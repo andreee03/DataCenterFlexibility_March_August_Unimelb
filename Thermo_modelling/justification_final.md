@@ -776,9 +776,432 @@ This data are updated at each step of the simulation.
 
 
 
+# More parameters:
+
+## 3. Parameter bounds
+
+### 3.1 Summary table
+
+| Symbol | Meaning | Lower | Central | Upper | Basis |
+|---|---|---|---|---|---|
+| `PUE` | Facility / IT power | 1.10 | 1.4 | 2.0 | [1][2] |
+| `AVG_TO_MAX_RATIO` | P_avg / P_max | 0.50 | 0.70 | 0.90 | [3][4] |
+| `CPU_POWER_FRACTION` (r) | P_CPU / P_IT | 0.20 | 0.32 | 0.45 | [3][5] |
+| `CHILLER_DESIGN_MARGIN` | Derate + fouling | 1.00 | 1.10 | 1.20 | [7] |
+| `TIER_REDUNDANCY` | Capacity multiplier | 1.0 (I–II) | (N+1)/N (III) | 2.0 (IV) | [8] |
+| `CRAH_AIRFLOW_MARGIN` | 1 / RTI target | 1.05 | 1.15 | 1.30 | [10][11] |
+| `airflow_per_capa_ratio` | derived | 88 CFM/kW | 125 | 180 | [9] |
+| `COP_ref` (water-cooled) | Full-load COP | 5.0 | 6.0 | 7.5 | [7] |
+| `COP_ref` (air-cooled) | Full-load COP | 2.5 | 3.0 | 3.6 | [7] |
+| `min_approach_temp` | LWT − wet bulb | 2.8 K | 4.0 K | 5.6 K | [7] |
+| `EPSILON` (tower) | Effectiveness | 0.55 | 0.70 | 0.85 | [7] |
+| `SECONDARY_LOOP_DELTA_T` | Chilled water ΔT | 5.5 K | 8 K | 11 K | [7] |
+| `vol_ratio` | White space m³/kW | 1.0 | 2.0 | 4.0 | [6] |
+| `vol_ton_ratio` | Loop volume | 3 gal/ton | 6 | 10 | [12] |
+
+### 3.2 `CPU_POWER_FRACTION` (r) ∈ [0.20, 0.45]
+
+Two multiplicative terms, and both must be included.
+
+**Within a compute node,** the CPU share at full load is 0.35–0.50 for a conventional 2-socket
+general-purpose server. The remainder is DIMMs (15–25%), VRM and PSU conversion losses (10–15%),
+fans (5–15%), and everything else. This is the classic result from Google's warehouse-scale power
+characterisation [3] and holds up in current SPECpower disclosures [5]. Two effects push the value
+*down* from a naive estimate:
+
+- TDP is not maximum power (see §1.1).
+- CPU share collapses at low utilisation, because DIMM, fan and PSU losses are far flatter than
+  CPU power. At idle the share drops toward 0.25.
+
+**At room level,** compute nodes are 70–90% of IT load. Network is typically 5–10%, storage
+10–20%. Hence:
+
+```
+r = f(CPU|server) × f(server|IT) ∈ [0.35 × 0.70, 0.50 × 0.90] = [0.25, 0.45]
+```
+
+The lower bound is widened to **0.20** to cover storage-heavy or GPU-inference estates, where
+per-node CPU share is much smaller.
+
+> **Use 0.32 as a default. Use `r` only downstream of `P_IT`, never to construct it.**
+> Running this relation backwards is what caused the original inversion.
+
+### 3.3 `CHILLER_DESIGN_MARGIN` × `WHITESPACE_LOAD_FACTOR` (the "Cte") ∈ [1.05, 1.50]
+
+Deliberately split into two factors, because they justify differently.
+
+**`WHITESPACE_LOAD_FACTOR` ∈ [1.05, 1.25]** is *real heat* the chiller must reject beyond `P_IT`:
+
+- UPS and PDU losses landing in the hall — 0–8%, depending on topology and whether UPS rooms sit
+  on the same loop
+- Lighting — ~1%
+- Envelope gain — 1–3%
+- **CRAH fan motor heat — 3–10% of IT load.** The largest single term, and the one most often
+  forgotten, because the fan sits downstream of the coil.
+
+Lower bound 1.05 assumes UPS outside the chilled envelope plus containment. Upper bound 1.25
+assumes in-room UPS and high fan power.
+
+**`CHILLER_DESIGN_MARGIN` ∈ [1.00, 1.20]** is *not heat* — it is capacity that cannot be used.
+Nameplate capacity is quoted at AHRI conditions; at design-day wet bulb with fouled tubes,
+delivered capacity falls. 1.10 is a defensible generic value. 1.00 is defensible **only** if
+`chose_model` already returns capacity at the actual design conditions rather than nameplate.
+
+**Redundancy is a third, separate factor — do not fold it in.** Tier III concurrent
+maintainability is N+1 on the capacity component, so the multiplier is `(N+1)/N` and depends on how
+many chillers were selected: 2.0 for a single-chiller plant, 1.25 for four. Tier IV fault tolerance
+is 2N [8]. Folding redundancy into a scalar constant is what makes small plants come out wrong.
+
+```
+Cte_effective = WHITESPACE_LOAD_FACTOR × CHILLER_DESIGN_MARGIN × TIER_REDUNDANCY
+              ∈ [1.05, ≈3.0]
+```
+
+The original `Cte = 1.0` is defensible only for Tier I with all overheads externalised — and even
+then it omits fan heat.
+
+### 3.4 Air-side chain
+
+The original failure was treating `airflow_per_capa_ratio` as a free input. It is not free:
+
+```
+airflow_per_capa_ratio = 1 / (ρ · c_p · ΔT_server)
+```
+
+and the same ΔT must appear on both sides of the coil.
+
+**`DELTA_T_SERVER_K` ∈ [10, 20] K.**
+Lower bound: legacy equipment and low-utilisation halls sit near 10–11 K, which is also the
+traditional CRAC design point of 20 °F. Upper bound: modern servers under ASHRAE A2+ operation
+with aggressive fan control reach 18–22 K [6][9]. Above ~20 K the design is generally in
+liquid-assisted or rear-door territory.
+
+This is an **emergent** quantity — it falls out of `P_server / V̇_server`, both of which should be
+taken from the vendor's ASHRAE equipment thermal report rather than reconstructed from heatsink
+curves. Component-level curves assume zero bypass and a deliberately small local rise (≈ 6 K at the
+Intel 4U design point [13]), so summing them systematically over-predicts flow demand.
+
+**`CRAH_AIRFLOW_MARGIN` ∈ [1.05, 1.30].**
+This is the inverse of the RTI target. Aim for RTI 85–95% — i.e. margin 1.05–1.18 — in a contained
+hall. Without containment, real facilities historically ran 1.5–3.0 at severe fan-energy cost;
+defensible to model, but should be flagged as legacy.
+
+The `assert` in §2 enforces margin ≥ 1.0. If it trips, the model has produced recirculation — the
+exact diagnostic that catches the original error.
+
+**Consistency check for any candidate parameter set:**
+
+```
+V̇_CRAH / V̇_IT = ΔT_server / ΔT_CRAH ∈ [1.05, 1.30]
+```
+
+If this falls below 1, the set is unphysical regardless of how reasonable each individual value
+looks in isolation.
+
+---
+
+## 4. Residual weaknesses
+
+- **`AVG_TO_MAX_RATIO` is the weakest link.** P_avg/P_max depends on the utilisation profile, and
+  server power is strongly non-linear in utilisation — idle draw is 30–50% of peak, so a hall at
+  30% CPU utilisation may sit at 60% of peak power. 0.8 is defensible for a well-utilised
+  enterprise estate, optimistic for a colocation hall. If `mode` supports it, make this a time
+  series rather than a scalar.
+- **`vol_ratio` only affects thermal mass / transient response,** so its wide bound matters little
+  for steady-state sizing but a lot for ride-through modelling. Derive it as
+  `ceiling height / power density` (1–3 kW/m², 3–4.5 m clear height) rather than guessing directly.
+- **`Q_cond = Q_evap(1 + 1/COP_ref)` uses the *reference* COP.** At part load with a waterside
+  economiser or low condenser water temperature, actual COP is higher and Q_cond lower; at design
+  day it is lower and Q_cond higher. Sizing on COP_ref is conservative in the right direction,
+  which is why `COND_FOULING_MARGIN` can stay near 1.05.
+- **PUE and `WHITESPACE_LOAD_FACTOR` are not independent.** Specifying PUE and then independently
+  specifying fan power, chiller COP and pump power will not close. Treat PUE as an *output* check,
+  or accept that `power_IT = size_in_kW / PUE` is a definition rather than a physical constraint.
+
+---
+
+## 5. Sources
+
+### Verified during preparation of this report
+
+1. Uptime Institute, *Global Data Center Survey* — annual PUE series; global average has sat near
+   1.5–1.6 for several years. **Check the current edition; the latest figure was not verified.**
+2. ASHRAE TC 9.9, *Thermal Guidelines for Data Processing Environments*, 5th ed. (2021).
+   Ch. 6 covers manufacturer heat-release and airflow reporting — the correct source for
+   per-server CFM. <https://www.ashrae.org>
+6. Data Center Frontier, *Understanding the Physics of Airflow in High Density Environments* —
+   confirms 158 CFM per kW at a 20 °F ΔT and the inverse ΔT–airflow relation; also summarises
+   ASHRAE envelope history.
+   <https://www.datacenterfrontier.com/special-reports/article/11427261/>
+9. As [6] for the CFM/kW conversion; ASHRAE TC 9.9 for the 10–20 K equipment ΔT range.
+10. Herrlin, M.K. (2007), *Return Temperature Index.*
+    `RTI = ΔT_AHU/ΔT_equip = (V̇_equip/V̇_AHU) × 100%`. Reproduced in LBNL,
+    *Self-benchmarking Guide for Data Centers*: RTI below 100% indicates supply air bypassing the
+    racks, above 100% indicates recirculation. <https://www.osti.gov/servlets/purl/983248>
+11. Herrlin, M.K. (2005), "Rack Cooling Effectiveness in Data Centers and Telecom Central Offices:
+    The Rack Cooling Index (RCI)," *ASHRAE Transactions* 111(2):725–731 — companion metric for
+    inlet-temperature compliance.
+13. Intel, *Xeon 7500 / E7-8800/4800/2800 Thermal and Mechanical Design Guide*, doc. 323342-002,
+    April 2011. Table 4-1 (boundary conditions; 12.6 / 28 / 36 CFM design points; airflow defined
+    as through the heatsink fins with zero bypass), §4.3.2 (Ψ_CA and ΔP curve fits), §1.2 (TDP is
+    not maximum power).
+    <https://www.intel.la/content/dam/www/public/us/en/documents/design-guides/xeon-7500-xeon-e7-8800-4800-2800-families-guide.pdf>
+
+### From general engineering knowledge — not verified; check before publishing
+
+4. Barroso & Hölzle, *The Datacenter as a Computer* — server utilisation distributions and the
+   energy-proportionality gap.
+5. SPECpower_ssj2008 published results — current per-node idle/peak power ratios.
+7. ASHRAE 90.1 Table 6.8.1-3 (chiller minimum efficiency, path A/B) and the ASHRAE *Datacom*
+   series vol. 1 — chiller COP ranges, tower approach, chilled-water ΔT.
+8. Uptime Institute, *Tier Standard: Topology* — Tier I–IV capacity and distribution requirements.
+12. Chilled-water loop minimum volume rule of thumb: 3 US gal/ton for comfort cooling,
+    6–10 gal/ton for close-control/process loops. Appears in Trane and Carrier application
+    manuals; ≈ 3–11 L/kW.
+
+# Defensible Operating Ranges for Six Data-Centre Cooling Model Parameters
+
+**Scope.** Lower/upper bounds for six chilled-water plant parameters, aimed at *operating* values rather than certification rating points. Sources are weighted: standards (ASHRAE 90.1, AHRI 550/590) > national-lab design guides (DOE/NREL, LBNL) > peer-reviewed / ASHRAE Journal work (Taylor, Schwedler) > manufacturer catalogue data > trade press > forums.
+
+**Method note — why the defaults need re-examining.** Four of the six defaults (2.4 GPM/ton, 3.0 GPM/ton, 400 CFM/ton, 5 °C ΔT) trace back to *rating conditions* or *comfort-cooling rules of thumb*, not to measured plant operation. AHRI 550/590 specifies 2.4 GPM/ton evaporator and 3.0 GPM/ton condenser purely so that chillers from different manufacturers are compared at an identical test point; the standard is explicit that equipment not designed for those conditions must have its efficiency ratings *adjusted*, which is a direct admission that real plants operate elsewhere. Ranges below are therefore anchored on first-principles physics, bracketed by code minima and by published design-practice recommendations.
+
+**Governing identities** (used throughout; IP units, water):
+
+- Chilled water: `GPM/ton = 24 / ΔT[°F] = 13.33 / ΔT[°C]`
+- Condenser water: `GPM/ton_evap = 24 × HRF / ΔT[°F]`, where `HRF = 1 + 0.284 × kW/ton` (1.13–1.24 for 0.45–0.85 kW/ton)
+- Air: `CFM/ton = 12,000 × SHR / (1.08 × ΔT_air[°F])`
+- Loop ride-through: `minutes = 0.0417 × (gal/ton) × ΔT_allowable[°F]`
+
+---
+
+## 1. Summary of recommended ranges
+
+| Parameter | Default | **Low** | **High** | Nominal | Extreme envelope | Basis |
+|---|---|---|---|---|---|---|
+| `evap_ratio` (GPM/ton) | 2.4 | **1.5** | **2.6** | 2.0 | 1.2 – 3.5 | ΔT 9–16 °F; CRAH catalogue |
+| `cond_ratio` (GPM/ton) | 3.0 | **1.6** | **3.0** | 2.2 | 1.5 – 3.3 | ASHRAE GreenGuide 12–18 °F |
+| `airflow_per_capa_ratio` (CFM/ton) | 400 | **300** | **600** | 450 | 270 – 750 | Air ΔT 20–40 °F, SHR ≈ 1 |
+| `SECONDARY_LOOP_DELTA_T` (°C) | 5 | **5.5** | **10.0** | 6.7 | 3 – 11 | 90.1 §6.5.4.7; low-ΔT field data |
+| `vol_ton_ratio` (gal/ton) | 10 | **6** | **20** | 10 | 3 – 40 | Chiller mfr. minima + ride-through |
+| `min_approach_temp` (°C) | 3 | **2.8** | **5.6** | 3.9 | 2.2 – 6.1 | DOE/NREL 5–7 °F tower approach |
+
+*(If `min_approach_temp` denotes a plate heat exchanger rather than a cooling tower, see §6 — the range shifts to 0.8–2.2 °C.)*
+
+---
+
+## 2. `evap_ratio` — chilled water flow, GPM/ton
+
+**Recommended: 1.5 – 2.6 GPM/ton; nominal 2.0.**
+
+The default 2.4 GPM/ton is the AHRI 550/590 evaporator test flow, corresponding to exactly 10 °F (5.6 °C) rise (54 °F/44 °F). It is a fair *central* value but a poor upper bound and an indefensible lower bound.
+
+Three independent anchors bracket the range:
+
+1. **Code floor on ΔT.** ASHRAE 90.1-2016 §6.5.4.7 requires chilled-water cooling coils to be selected for ≥15 °F ΔT with leaving water ≥57 °F — i.e. ≤1.6 GPM/ton. Trane's Engineers Newsletter on this addendum shows six- and eight-row coils achieving 15, 20 and 25 °F ΔT (40, 30 and 24 GPM for the same duty), so 1.2–1.6 GPM/ton is demonstrably buildable. Note exceptions 6 and 7 (entering water ≥50 °F; entering air ≤65 °F) exempt many data-centre coils, so this is guidance rather than a binding limit for your model.
+2. **Real CRAH catalogue data.** Vertiv Liebert CW 305/375/415 (SL-70373, 45 °F entering water) tabulates 12 selection points at 10 °F and 12 °F water rise. Derived flow is **2.09–2.60 GPM/ton**, mean 2.33 — consistently *above* the theoretical 24/ΔT because catalogue "net capacity" deducts fan motor heat while the water loop still carries it. This is the single best justification for keeping 2.4 in the middle of the range rather than discarding it.
+3. **Field degradation.** Low-ΔT syndrome routinely halves design ΔT. HPAC Engineering documents a 16 °F design (1.5 GPM/ton) degrading to 8 °F (3.0 GPM/ton) under fouling; severe cases fall to 2 °F. Commissioning literature reports typical systems running at roughly 55–70 % of design ΔT.
+
+**Hard equipment limits.** Johnson Controls' centrifugal chiller application data sets full-load evaporator tube velocity between 3 and 12 ft/s, which is what physically constrains the selectable ΔT band (roughly 6–20 °F on most machines). Below ~1.2 GPM/ton you risk falling under the chiller's minimum flow; above ~3.5 GPM/ton you risk tube erosion and excessive pressure drop.
+
+---
+
+## 3. `cond_ratio` — condenser water flow, GPM/ton
+
+**Recommended: 1.6 – 3.0 GPM/ton; nominal 2.2.**
+
+The default 3.0 GPM/ton is again the AHRI rating point (85 °F entering / 94.3 °F leaving ≈ 9.3 °F range). This is the *legacy upper bound*, and the industry has explicitly moved away from it:
+
+- **ASHRAE GreenGuide**, quoting the CoolTools Chilled Water Plant Design Guide, recommends starting from a condenser ΔT of **12–18 °F (7–10 °C)**, i.e. **2.3–1.6 GPM/ton**.
+- **Taylor (ASHRAE Journal, Dec 2011, Part 3)** concludes life-cycle costs are minimised at the largest ΔT analysed, about **15 °F (≈1.9 GPM/ton)** — and states this held for *both* office buildings and data centres, and for low-, medium- and high-approach towers.
+- Schwedler and Bakkum's summary of that work recommends designing at **1.6–2.3 GPM/ton** because it not only lowers first and life-cycle cost but makes the plant far less sensitive to how well the tower fans and condenser pumps are controlled.
+- The older counter-position (Schwedler, ASHRAE Trans. 1996) argued 3 GPM/ton often gives the lowest *full-load* system power; it remains a defensible upper bound, particularly for legacy plants.
+
+**Floor.** ~1.5 GPM/ton. Below that you hit the highest of three limits: tower minimum flow for even fill wetting, chiller minimum condenser tube velocity, and pump minimum speed to lift water to the tower distribution basin.
+
+**Unit trap.** Confirm whether your denominator is *evaporator* tons or *tower nominal* tons. Cooling towers are rated at 15,000 BTU/h per nominal ton (3 GPM at 10 °F range), not 12,000 — so 3.0 GPM per tower-ton and 3.0 GPM per chiller-ton are different quantities by ~17 %.
+
+---
+
+## 4. `airflow_per_capa_ratio` — CFM/ton
+
+**Recommended: 300 – 600 CFM/ton; nominal 450.**
+
+The cited ACHR News figure is a DX field-troubleshooting rule of thumb for *comfort* cooling, where SHR ≈ 0.75–0.80 and the coil dehumidifies. Data-hall coils run essentially dry (DOE explicitly advises keeping chilled water above ~50 °F so coils stay above dew point), so SHR ≈ 0.95–1.0 and the physics differ.
+
+Interestingly, this does **not** invalidate 400 — but it means 400 is only correct for a specific return-air temperature. From the same Vertiv Liebert CW tables:
+
+| Return air | Derived CFM/ton |
+|---|---|
+| 75 °F DB (weak or no containment) | 359 – 567 |
+| 85 °F DB (good hot-aisle containment) | 272 – 390 |
+
+Overall span 272–567, mean 394. Trade literature is consistent: 350–400 CFM/ton for comfort systems versus roughly 500–600 (some sources quote up to 900 for older precision units at low return-air temperatures). On the IT side, Data Center Frontier gives ~158 CFM/kW at 20 °F rise — equivalent to ~555 CFM/ton — while DOE/NREL notes the air temperature rise across a server ranges from 10 °F to over 40 °F, which alone spans 278–1,110 CFM/ton.
+
+**Practical guidance:** make this parameter a function of containment/return-air temperature rather than a constant. Use 400–550 for uncontained legacy halls and 300–400 for contained high-density halls. Cross-check against the DOE airflow-efficiency benchmark of 1.25 / 0.75 / 0.5 W/CFM (standard / good / better).
+
+---
+
+## 5. `SECONDARY_LOOP_DELTA_T` — °C
+
+**Recommended: 5.5 – 10.0 °C (10 – 18 °F); nominal 6.7 °C (12 °F).**
+
+The default 5 °C (9 °F) sits *below* the AHRI rating point and well below every modern design recommendation. Justification for the range:
+
+- **Lower bound 5.5 °C (10 °F):** the AHRI 550/590 rating ΔT, and the lower of the two water-rise cases Vertiv publishes for its CRAH line (10 °F and 12 °F).
+- **Upper bound 10 °C (18 °F):** ASHRAE 90.1-2016 requires ≥15 °F (8.3 °C) for coils generally; Taylor and Trane demonstrate 20 °F and 25 °F selections as cost-optimal. Data-centre coils with warm supply water and hot return air reach the top of this band readily.
+- **Degraded tail down to 3 °C:** if you want the model to represent a real, imperfectly-commissioned plant rather than a design-day plant, extend the low end. Low-ΔT syndrome is described in the literature as one of the most common and costly chilled-water problems, and systems commonly run at 55–70 % of design ΔT.
+
+### ⚠ Internal consistency check on your current values
+
+`evap_ratio` and `SECONDARY_LOOP_DELTA_T` are not independent — they are two views of the same energy balance.
+
+- `evap_ratio = 2.4` implies a **primary** ΔT of 24/2.4 = 10.0 °F = **5.56 °C**
+- `SECONDARY_LOOP_DELTA_T = 5 °C` = 9.0 °F implies a **secondary** flow of 24/9.0 = **2.67 GPM/ton**
+
+The secondary loop therefore demands ~11 % more flow than the primary delivers. In a decoupled primary/secondary plant this is exactly the condition that drives reverse flow through the decoupler and mixes supply water into the return — you have a mild low-ΔT syndrome already encoded in the defaults. This may be intentional; if not, either set `evap_ratio = 13.33 / SECONDARY_LOOP_DELTA_T` or model the decoupler explicitly. In a variable-primary-flow plant the two must be equal by construction.
+
+---
+
+## 6. `vol_ton_ratio` — system water volume, gal/ton
+
+**Recommended: 6 – 20 gal/ton; nominal 10.**
+
+The default 10 gal/ton is well supported, but the literature spans a wide band because three different sizing criteria are in play:
+
+| Criterion | Typical gal/ton | Source type |
+|---|---|---|
+| Minimum loop volume, standard comfort HVAC | 3 – 6 | Chiller/tank manufacturers (Niles, Amtrol, American Wheatley) |
+| Close temperature control / critical accuracy | 6 – 10 | Same |
+| Data-centre buffer sizing, common rule of thumb | ~10 | Trade practice |
+| Short-cycle protection with 10 %-turndown VSD chillers | 15 – 25 | Cycle-time calculation |
+| Genuine thermal ride-through (10–15 min) | 25 – 40+ | Dedicated storage tank |
+
+Manufacturer guidance clusters tightly: 3–10 gal/ton depending on required temperature-control accuracy, with 3–6 typical and 6–10 where accuracy is critical (one source extends to 12).
+
+**Do the ride-through arithmetic yourself rather than trusting the 10 gal/ton shorthand.** Using `minutes = 0.0417 × (gal/ton) × ΔT_allowable`:
+
+- 10 gal/ton with a 10 °F allowable rise → **4.2 minutes**
+- 10 gal/ton with 15 °F → 6.2 minutes
+- 20 gal/ton with 12 °F → 10 minutes
+
+Claims that 10 gal/ton buys ~10 minutes of protection do not survive this check. If your model needs to represent the 10–15 minute ride-through that mission-critical sites specify — matching chiller restart and generator pickup time — you need 25–40 gal/ton, which in practice means a dedicated stratified storage tank, not distributed loop volume. ASHRAE TC 9.9 notes cold-aisle temperatures can reach 30 °C within about five minutes of a cooling failure, so the allowable-rise term is small and the volume requirement is correspondingly large.
+
+**Recommendation:** treat `vol_ton_ratio` as two variables — inherent loop volume (6–12 gal/ton) plus optional storage — if ride-through behaviour matters to your results.
+
+---
+
+## 7. `min_approach_temp` — °C
+
+This term is ambiguous; the defensible range depends entirely on which approach is meant. Your 3 °C is a good cooling-tower value and a poor heat-exchanger value.
+
+### (a) Cooling tower approach to wet bulb — **recommended 2.8 – 5.6 °C (5 – 10 °F); nominal 3.9 °C (7 °F)**
+
+- **Rating point:** CTI/ASHRAE 90.1 heat-rejection efficiency is defined at 95/85/75 °F — a 10 °F (5.6 °C) approach. Upper bound.
+- **Conventional HVAC design:** 85 °F leaving water at 78 °F design wet bulb = 7 °F (3.9 °C). This is the classic selection and a sound nominal.
+- **Data-centre best practice:** DOE/NREL's *Best Practices Guide for Energy-Efficient Data Center Design* recommends a **5–7 °F approach tower with condenser water reset**, paired with a variable-speed chiller. Your 3 °C (5.4 °F) sits squarely in this band and is well justified.
+- **Economic floor:** below roughly 4–5 °F (2.2–2.8 °C) tower size grows sharply for diminishing return. Reducing approach from 7 °F to 5 °F alone increases tower size by ~20 %.
+
+### (b) Plate-and-frame heat exchanger approach (water-side economiser) — **recommended 0.8 – 2.2 °C (1.5 – 4 °F); nominal 1.4 °C (2.5 °F)**
+
+Counterflow plate exchangers reach approaches as close as 2 °F. DOE/NREL states the heat exchanger can be selected for an approach below 3 °F (1.7 °C). Academic review of water-side economiser design (citing Stein, 2009) notes the approach can go below 3 °F but that it is usually more cost-effective to enlarge the cooling tower than the heat exchanger, since exchanger cost rises steeply as approach narrows.
+
+### (c) Chiller vessel approach (LWT minus saturated refrigerant temperature)
+Typically 1–3 °F clean, degrading with fouling. Rarely an explicit model input; noted only for completeness.
+
+---
+
+## 8. Suggested use in the model
+
+1. **Enforce the coupling** between `evap_ratio` and `SECONDARY_LOOP_DELTA_T` (§5) rather than sampling them independently — otherwise a fraction of your Monte Carlo draws will violate energy conservation across the decoupler.
+2. **Sample flow ratios from ΔT, not from GPM/ton.** ΔT is closer to uniform across the plausible design space; GPM/ton is its reciprocal and will be badly skewed if sampled uniformly.
+3. **Make `airflow_per_capa_ratio` conditional** on return-air temperature or containment state (§4).
+4. **Disambiguate `min_approach_temp`** before fixing bounds (§7).
+5. For a defensible worst case, combine the *degraded* tails (low ΔT, high flow ratios) rather than mixing best-case and worst-case parameters across loops.
+
+---
+
+## Sources
+
+**Standards and codes**
+1. ANSI/AHRI Standard 550/590 (I-P)-2023, *Performance Rating of Water-Chilling and Heat Pump Water-Heating Packages Using the Vapor Compression Cycle*. AHRI. — rating conditions 44 °F LCHWT, 2.4 GPM/ton evaporator, 85 °F ECWT, 3.0 GPM/ton condenser.
+2. ANSI/ASHRAE/IES Standard 90.1-2016, §6.5.4.7 *Chilled-Water Coil Selection* (≥15 °F ΔT, ≥57 °F LWT, seven exceptions); Table 6.8.1-7 heat-rejection efficiency at 95/85/75 °F; Appendix G §G3.1.3.11 (condenser supply = lower of 85 °F or 10 °F approach to design wet bulb).
+3. IECC 2018 §C403.3.2.1, Water-Cooled Centrifugal Chilling Packages — https://up.codes/viewer/colorado/iecc-2018/chapter/CE_4/ce-commercial-energy-efficiency#C403.3.2.1
+
+**National-lab / government design guides**
+4. Van Geet, O. and Sickinger, D. (2024). *Best Practices Guide for Energy-Efficient Data Center Design*, DOE/GO-102024-6283, NREL for DOE FEMP. — 5–7 °F tower approach; <3 °F heat-exchanger approach; ≥55 °F chilled water; 10–40 °F server air rise; cooling-system and airflow-efficiency benchmarks. https://www.energy.gov/sites/default/files/2024-07/best-practice-guide-data-center-design_0.pdf
+5. ASHRAE TC 9.9 (2016). *Data Center Power Equipment Thermal Guidelines and Best Practices* — ride-through behaviour. https://www.ashrae.org/file%20library/technical%20resources/bookstore/ashrae_tc0909_power_white_paper_22_june_2016_revised.pdf
+6. ASHRAE (2021). *Thermal Guidelines for Data Processing Environments*, 5th ed. (Datacom Series 1) — A1–A4 classes, 18–27 °C recommended.
+
+**Peer-reviewed / ASHRAE Journal**
+7. Taylor, S.T. (2011). "Optimizing Design & Control of Chilled Water Plants, Part 3: Pipe Sizing and Optimizing ΔT." *ASHRAE Journal* 53(12):22–34.
+8. Schwedler, M. and Bakkum, B. (2013). "Condenser Water System Savings." *HPAC Magazine*, June 2013 (from Trane Engineers Newsletter 41-3). https://www.hpacmag.com/features/condenser-water-system-savings/
+9. Schwedler, M. (1996). "3 GPM/ton condenser water flow rate: Does it waste energy?" *ASHRAE Transactions*. https://www.osti.gov/biblio/509314
+10. Kelly, D.W. and Chan, T. (1999). "Optimizing Chilled Water Plants." *HPAC Engineering* 71(1).
+11. ASHRAE (2010). *ASHRAE GreenGuide*, 3rd ed. — CoolTools recommendation of 12–18 °F condenser ΔT.
+12. Penn State ETDA. *Optimized Design of Waterside Economizers* — heat-exchanger approach economics, citing Stein (2009) and Kelly (1996). https://etda.libraries.psu.edu/files/final_submissions/23314
+
+**Manufacturer technical literature**
+13. Vertiv. *Liebert CW Thermal Management System System Design Catalog, 305/375/415 kW* (SL-70373). — capacity/flow/airflow tables used for the CFM/ton and GPM/ton derivations. https://www.vertiv.com/492d8e/globalassets/products/thermal-management/room-cooling/sl-70373_rev0_web.pdf
+14. Trane (2019). *Selecting Chilled-Water Coils for ASHRAE 90.1's New 15 °F Delta T Requirement*, Engineers Newsletter 48-2 (ADM-APN070-EN). https://www.trane.com/content/dam/Trane/Commercial/global/products-systems/education-training/engineers-newsletters/standards-codes/ADM-APN070-EN_06032019.pdf
+15. Johnson Controls / YORK. *Centrifugal Chiller Minimum and Maximum Flow Limits — Application Data* (3–12 ft/s full-load tube velocity). https://docs.johnsoncontrols.com/chillers/api/khub/documents/J0n4M7IPtbVDbIZKQKeWFQ/content
+16. Niles Steel Tank, *Chilled Water Buffer Tanks* (3–10 gal/ton; 3–6 typical, 6–10 critical). https://www.nilesst.com/chilled-water-buffer-tanks/
+17. Amtrol, *Chilled Water Buffer Sizing* (MC10260); American Wheatley, *Buffer Tanks for Chilled Water Systems* (3.40.50 AWCBT).
+
+**Trade press and applied engineering**
+18. HPAC Engineering, "Getting Real in the Chiller Plant: 30 Years Later" — 16 °F design degrading to 8 °F. https://www.hpac.com/facility-management/article/21130318/getting-real-in-the-chiller-plant-30-years-later
+19. Data Center Frontier, *Understanding the Physics of Airflow in High Density Environments* — 158 CFM/kW at 20 °F ΔT. https://www.datacenterfrontier.com/special-reports/article/11427261/
+20. Chiller & Cooling Best Practices, *Evaluating Process Cooling Supply Temperatures* — 7 °F tower approach; difficulty below 4–5 °F. https://coolingbestpractices.com/technology/cooling-towers/evaluating-process-cooling-supply-temperatures
+21. JMP Coblog, *Cooling Tower and Condenser Water Design Part 3* and *How To Size A Waterside Economizer Part 5* — tower rating basis; 2 °F plate-exchanger approach.
+22. CED Engineering, *HVAC Cooling Systems for Data Centers* (M05-020) — precision units at 500–600 CFM/ton vs ~400 for comfort. https://www.cedengineering.com/userfiles/M05-020%20-%20HVAC%20Cooling%20Systems%20for%20Data%20Centers%20-%20US.pdf
+23. Upsite Technologies, *The 4 Delta T's of Data Center Cooling* — IT equipment ΔT typically 20–35 °F.
+
+*Reference values only, not verified by the author: item 20's economic floor and the trade-press CFM/ton bands are consistent with, but independent of, the catalogue-derived figures in §4, which should be treated as the stronger evidence.*
+
+# cabinets_capacitance
+
+### Geometry
+
+The envelope is fixed by standards, not by guesswork. EIA-310 (and IEC 60297, which Schneider cites as the governing spec for this product family) defines a rack unit as 1.75 in / 44.45 mm, a 19 in / 482.6 mm panel width, and 17.75 in / 450.85 mm between mounting rails — dimensions that Schneider restates verbatim in the AR3100 environmental profile as the functional unit for a 42U enclosure. So the mounting height is 42 × 44.45 = 1866.9 mm, and the external envelope adds a plinth and roof: the APC NetShelter SX AR3100 measures 1991 mm high × 600 mm wide × 1070 mm deep with a net weight of 125.09 kg, and the Tripp Lite SR42UB is essentially the same box at 1993.9 × 600.2 × 1092.2 mm, 127.46 kg, built from powder-coated steel to EIA/ECA-310-E. From that envelope the sheet areas follow directly: two side panels of 1.991 × 1.070 = 2.13 m² each, two doors of 1.991 × 0.600 = 1.19 m² each, and a roof plus base of 0.64 m² each — about 8.2 m² of skin. Thickness is bounded below by the standard itself, which specifies a minimum post thickness of 1.9 mm (16 gauge); panels are typically 1.0–1.5 mm. Doors are mostly air: APC quotes 80% door perforation on the Gen 2 SX and Vertiv quotes 77% perforated doors on the VR3100. Building mass up from these areas at 7850 kg/m³ (the standard engineering density for mild steel such as A36 or 1018) gives roughly 111 kg — within about 11% of the published 125 kg, which confirms the geometry is self-consistent but also confirms that the manufacturer's net weight, not my sheet-metal tally, should be the primary input. [AR3100: APC NetShelter SX 42U Enclosure +3](https://www.eaccu-tech.com/cabinets-racks/ar3100-apc-netshelter-sx-42u-enclosure/)
+
+### Computation
+
+Material proportions come from the product's own Type III environmental declaration rather than assumption. The PEP ecopassport for the AR3100B2 gives a reference mass of 147,841.71 g including packaging and accessories, distributed as 86.0% steel, 11.9% wood, 0.9% cardboard, 0.3% glass, 0.3% polyamide, 0.3% polycarbonate, 0.1% ABS, 0.1% paper and 0.1% various. Wood, cardboard and paper are packaging — the earlier PEP for the same product confirms this, listing 16,190 g of packaging of which 15,340 g is wood — so stripping that 12.9% leaves a product mass of 128.77 kg composed of 127.14 kg steel, 0.44 kg each of glass, PA and PC, and 0.15 kg each of ABS and miscellaneous. For specific heats I used 486 J/(kg·K) for the sheet steel, the value tabulated for AISI 1018 and 1020 annealed over 50–100 °C, sourced from Callister and ASM Handbook Vol. 1; 840 for soda-lime glass, 1700 for PA, 1200 for PC, 1400 for ABS and 900 for the residual metals. Summing mᵢcᵢ:
+
+| Material | Mass (kg) | % of product | c (J/kg·K) | C (J/K) |
+| --- | --- | --- | --- | --- |
+| Steel | 127.14 | 98.74 | 486 | 61,792 |
+| Polyamide | 0.44 | 0.34 | 1700 | 754 |
+| Polycarbonate | 0.44 | 0.34 | 1200 | 532 |
+| Glass | 0.44 | 0.34 | 840 | 373 |
+| ABS | 0.15 | 0.11 | 1400 | 207 |
+| Various | 0.15 | 0.11 | 900 | 133 |
+| **Total** | **128.77** | **100** | —   | **63,791** |
+
+That is **≈ 63.8 kJ/K**, of which steel contributes 96.9%. The non-steel fraction is worth noting only because polymers have roughly three times the specific heat of steel: 1.3% of the mass supplies 3.2% of the capacitance. Rescaling to the Gen 1 AR3100's 125.09 kg gives 62.0 kJ/K, and to the Tripp Lite SR42UB's 127.46 kg gives 63.1 kJ/K.
+
+### Admissible range
+
+**We take C = 62 kJ/K as the central value, with a defensible interval of 50 – 80 kJ/K** (≈1.2–1.9 kJ/K per rack unit). Two things drive the spread. First, mass varies with footprint and gauge across otherwise "classic" cabinets: within one product line the same 42U height runs from 125.09 kg at 600 × 1070 mm, to 134.09 kg for the AR3300 at 600 × 1200 mm, to 161.36 kg for the AR3350 at 750 × 1200 mm; lighter economy enclosures sit near 110 kg. Second, the steel specific heat is itself a small range — AISI 1010 is tabulated at 450 J/(kg·K) against 486 for 1018/1020, and austenitic 304 at 500. Combining the extremes: 110 kg at 450 J/(kg·K) gives 51 kJ/K as the lower bound, and 161 kg at 500 J/(kg·K) gives 83 kJ/K as the upper, which I would round to 50–80 kJ/K for a standard 600 mm-wide cabinet and extend to 85 kJ/K only if you are explicitly modelling wide or deep colocation enclosures. Two caveats for the model: an open-frame 4-post rack has no doors, sides, roof or base and falls to roughly 20–25 kJ/K, so it should not be drawn from this interval; and this is the _empty_ cabinet only — a 42U rack populated with 1U servers at ~15 kg each carries on the order of 380 kJ/K, so the enclosure is about 15% of a loaded rack's thermal mass and the cabinet term only dominates if you are
 
 # Sizing ideas
 
+
+# Setpoint choice justification
+
+## Chilled-Water Setpoint Bounds for the Data-Center Study
+
+A **lower chilled-water setpoint of 4°C** was selected as an aggressive but physically plausible bound for the pre-cooling/over-cooling analysis. This value is close to the lower operating limit of conventional water-cooled chillers without entering specialized low-temperature operation. For example, Carrier specifies a minimum evaporator leaving-water temperature of **3.3°C** for its 30XW water-cooled screw chiller and states that _“if the leaving water temperature is below 3.3°C, a frost protection solution must be used.”_ Therefore, 4°C represents a reasonable extreme sensitivity case while retaining a small margin above this published limit. It should nevertheless be used only if the specific simulated chiller and its performance curves are valid at this temperature, since minimum leaving-water temperatures vary by manufacturer and model.
+
+An **upper chilled-water setpoint of 15°C** was selected as an aggressive high-temperature reset case that remains technically credible for a data center. The U.S. Department of Energy recommends medium-temperature chilled-water systems and states that a supply temperature of **55°F (12.8°C) or higher** improves chiller efficiency and reduces unwanted dehumidification; Carrier's representative 30XW chiller permits evaporator leaving-water temperatures up to **20°C**. Thus, 15°C is above the DOE's efficient warm-water reference point but still comfortably inside a representative chiller operating envelope, making it suitable for evaluating the maximum practical energy-saving potential without approaching the chiller's mechanical upper limit. The final acceptability of this case must be checked on the air side: ASHRAE TC 9.9 recommends maintaining IT-equipment inlet air within **18–27°C** for Classes A1–A4, so the 15°C case is valid only if the CRAH system can still satisfy the required IT inlet temperature.
+
+## References
+
+1.  **Carrier — 30XW Water-Cooled Screw Chiller, Operating Range.** Evaporator leaving-water operating range: 3.3–20°C; frost-protection requirement below 3.3°C.  
+    [https://www.carrier.com/commercial/en/my/media/30XW\_tcm177-84440.pdf](https://www.carrier.com/commercial/en/my/media/30XW_tcm177-84440.pdf)
+2.  **U.S. Department of Energy — Best Practices Guide for Energy-Efficient Data Center Design (2024).** Sections 5.3.1–5.3.2 recommend medium-temperature chilled-water operation and identify 55°F (12.8°C) or higher as beneficial for efficiency and avoiding uncontrolled dehumidification.  
+    [https://www.energy.gov/sites/default/files/2024-07/best-practice-guide-data-center-design\_0.pdf](https://www.energy.gov/sites/default/files/2024-07/best-practice-guide-data-center-design_0.pdf)
+3.  **ASHRAE TC 9.9 — Thermal Guidelines for Data Processing Environments, Fifth Edition Reference Card (2021/2024).** Recommended IT-equipment inlet dry-bulb temperature for Classes A1–A4: 18–27°C.  
+    [https://www.ashrae.org/file%20library/technical%20resources/bookstore/supplemental%20files/therm-gdlns-5th-r-e-refcard.pdf](https://www.ashrae.org/file%20library/technical%20resources/bookstore/supplemental%20files/therm-gdlns-5th-r-e-refcard.pdf)
 ## Methodology
 $
 With 
@@ -799,6 +1222,9 @@ Thus, we can write : $ PUE = 1 + \frac{1}{COP_{avg}}$
 
 - For the thermal_resistances, we take \Psi_{ca} in the worst case scenario. So we over value security, reduce flexibility.
 the cooling system must be sized such that the CPU temperatures are equal to their $T_{CPU, TJmax}$
+
+
+
 # For latex
 
 \printbibliography
